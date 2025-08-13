@@ -1,0 +1,70 @@
+{% include 'includes/theme.html' %}
+{% load static %}
+{% include 'includes/head.html' %}
+<script src="{% static 'js/search.js' %}"></script>
+<script>const globalTaskId = "{{ task_id|escapejs }}";</script>
+</head>
+
+<body>
+  {% include 'includes/navbar.html' %}
+
+  <h1>Search results:</h1>
+
+  <div x-data="getData()">
+    {% include 'includes/alert.html' %}
+    {% include 'includes/wait.html' %}
+    <table class="table  table-striped">
+      <thead>
+        <tr>
+          <th scope="col">Title</th>
+          <th scope="col">Cached</th>
+          <th scope="col">Seeders</th>
+          <th scope="col">Peers</th>
+          <th scope="col">Size</th>
+          <th scope="col">Action</th>
+        </tr>
+      </thead>
+
+      <tbody>
+        <template x-if="torrents.length > 0">
+          <template x-for="entry in torrents" :key="index">
+
+            <tr>
+              <td :class="{'text-warning': entry.torrent, 'text-success': entry.cached, '': entry.cached == false } "
+                x-text="entry.raw_title"></td>
+              <td :class="{'text-success': entry.cached, '': entry.cached == false }" x-text="entry.cached"></td>
+              <td :class="{'text-warning': entry.torrent }" x-text="{ entry.torrent > 0 }"></td>
+              <td x-text="entry.last_known_seeders"></td>
+              <td x-text="entry.last_known_peers"></td>
+              <td x-text="formatBytes(entry.size)"></td>
+              <td>
+                <button type="button" class="btn btn-outline-primary btn-sm" @click="downloadFile(entry.id)">Add to
+                  TorBox
+                </button>
+              </td>
+            </tr>
+
+          </template>
+        </template>
+        <template x-if="torrents.length === 0 && !isLoading">
+          <tr>
+            <td colspan="7" class="text-center text-muted py-3">
+              No results found.
+            </td>
+          </tr>
+        </template>
+        <template x-if="torrents.length === 0 && isLoading">
+          <tr>
+            <td colspan="7" class="text-center text-muted py-3">
+              Search in progress...
+            </td>
+          </tr>
+        </template>
+      </tbody>
+
+    </table>
+  </div>
+
+</body>
+
+</html>

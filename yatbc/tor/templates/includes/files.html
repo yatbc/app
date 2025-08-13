@@ -1,0 +1,43 @@
+<table class="table  table-striped table-responsive" style="table-layout: fixed; width: 100%;">
+    <thead>
+        <tr>
+            <th scope="col">Name</th>
+            <th scope="col" style="width: 100px;">Mime type</th>
+            <th scope="col" style="width: 100px;">Aria status</th>
+            <th scope="col" style="width: 100px;">Action status</th>
+            <th scope="col" style="width: 100px;">Aria error</th>
+        </tr>
+    </thead>
+
+    <tbody>
+        <template x-if="files.length > 0">
+            <template x-for="entry in files" :key="index">
+
+                <tr :class="{'text-danger': entry.aria.error, '': !entry.aria.error } ">
+                    <td x-text="entry.name" class="text-break"></td>
+                    <td x-text="entry.mime_type"></td>
+                    <td x-text="entry.aria.status"></td>
+                    <td x-text="entry.action_on_finish_done ? 'Done' : 'Waiting'"></td>
+                    <td x-text="entry.aria.error ? entry.aria.error : 'No Error'"></td>
+
+                </tr>
+
+            </template>
+        </template>
+        <template x-if="files.length === 0 && !isLoading">
+            <tr>
+                <td colspan="5" class="text-center text-muted py-3">
+                    No files found. Waiting for TorBox to finish downloading.
+                </td>
+            </tr>
+        </template>
+        <template x-if="files.length === 0 && isLoading">
+            <tr>
+                <td colspan="5" class="text-center text-muted py-3">
+                    Loading...
+                </td>
+            </tr>
+        </template>
+    </tbody>
+
+</table>

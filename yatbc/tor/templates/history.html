@@ -1,0 +1,87 @@
+{% include 'includes/theme.html' %}
+{% load static %}
+{% include 'includes/head.html' %}
+<script src="{% static 'js/history.js' %}"></script>
+</head>
+
+<body>
+  {% include 'includes/navbar.html' %}
+
+  <h1>History:</h1>
+  <p><strong>Note:</strong> Includes last 50 entries</p>
+  <div x-data="getData()">
+    {% csrf_token %}
+    {% include 'includes/alert.html' %}
+    {% include 'includes/wait.html' %}
+    <table class="table  table-striped" style="table-layout: fixed; width: 100%;">
+      <thead>
+        <tr>
+          <th scope="col" style="width: 100px;">Client</th>
+          <th scope="col">Name</th>
+          <th scope="col" style="width: 400px;">Hash</th>
+          <th scope="col" style="width: 100px;">Total Uploaded</th>
+          <th scope="col" style="width: 100px;">Download finished</th>
+          <th scope="col" style="width: 100px;">Local download finished</th>
+          <th scope="col" style="width: 100px;">Type</th>
+          <th scope="col" style="width: 200px;">Actions</th>
+        </tr>
+      </thead>
+
+      <tbody>
+        <template x-if="history.length > 0">
+          <template x-for="entry in history" :key="index">
+
+            <tr>
+              <td x-text="entry.client"></td>
+              <td x-text="entry.name" class="text-break"></td>
+              <td x-text="entry.hash"></td>
+              <td x-text="formatBytes(entry.total_uploaded)"></td>
+              <td x-text="entry.download_finished"
+                :class="{'text-danger': !entry.download_finished, 'text-success': entry.download_finished } "></td>
+              <td x-text="entry.local_download_finished"
+                :class="{'text-danger': !entry.local_download_finished, 'text-success': entry.local_download_finished } ">
+              </td>
+              <td x-text="torrent_types.find(item => item.id === entry.torrent_type).name"></td>
+              <td>
+                <a class="btn-info" :href="'/torrent_details/' + entry.id">Details</a>
+                <button type="button" class="btn btn-outline-danger btn-sm" @click="deleteHistory('single', entry.id)"
+                  data-bs-toggle="tooltip" data-bs-placement="top"
+                  title="Removes all entries related to selected torrent. Does not remove downloaded files.">Remove</button>
+
+
+              </td>
+            </tr>
+
+          </template>
+        </template>
+        <template x-if="history.length === 0 && !isLoading">
+          <tr>
+            <td colspan="8" class="text-center text-muted py-3">
+              No historic downloads found.
+            </td>
+          </tr>
+        </template>
+        <template x-if="history.length === 0 && isLoading">
+          <tr>
+            <td colspan="8" class="text-center text-muted py-3">
+              History loading...
+            </td>
+          </tr>
+        </template>
+      </tbody>
+
+    </table>
+    <div class="mb-3">
+      <button class="btn btn-primary ms-auto" @click="deleteHistory()" data-bs-toggle="tooltip" data-bs-placement="top"
+        title="Removes all entries related to selected torrents. Does not remove downloaded files.">Delete history older
+        than 1 month</button>
+      <button class="btn btn-danger ms-auto" @click="deleteHistory('all')" data-bs-toggle="tooltip"
+        data-bs-placement="top"
+        title="Removes all entries related to selected torrents. Does not remove downloaded files.">Delete all
+        history</button>
+    </div>
+  </div>
+
+</body>
+
+</html>

@@ -1,0 +1,9 @@
+FROM debian:latest
+
+RUN apt-get update && apt-get upgrade -y && apt-get install -y \
+    aria2 tzdata 
+COPY docker/aria/aria2.conf /etc/aria2.conf
+RUN groupadd -g 1000 yatbc
+RUN useradd -u 1000 -g 1000 -G www-data yatbc
+USER yatbc
+ENTRYPOINT ["aria2c", "--conf-path=/data/persistent/aria2/aria2.conf"]

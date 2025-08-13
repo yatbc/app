@@ -1,0 +1,10 @@
+django
+django-bootstrap5
+torbox_api
+django-tasks
+transmission-rpc
+requests
+asttokens
+django-constance
+bleach
+dotenv

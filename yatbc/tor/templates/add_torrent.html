@@ -1,0 +1,51 @@
+{% include 'includes/theme.html' %}
+{% load static %}
+{% include 'includes/head.html' %}
+<script src="{% static 'js/add_torrent.js' %}"></script>
+</head>
+
+<body>
+
+  {% include 'includes/navbar.html' %}
+  {% csrf_token %}
+  <h1>Add torrent</h1>
+  <div x-data="get_add_torrent()">
+    {% include 'includes/alert.html' %}
+    {% include 'includes/wait.html' %}
+    <p>
+      <strong>Note:</strong> YATBC does not support queues at the moment.
+    </p>
+
+    <div class="mb-3">
+      <label for="magnet" class="form-label">Magnet</label>
+      <textarea id="magnet" x-model="magnetValue" rows="3" @input="validateMagnet()" @blur="validateMagnet()"
+        :class="{ 'form-control': true, 'is-invalid': !magnetValid, 'is-valid': magnetValid }"
+        placeholder="Enter magnet link"></textarea>
+    </div>
+    <div class="mb-3">
+      <select class="form-select" x-model="selectedTypeId" id="torrent_type">
+        <template x-for="item in torrent_types" :key="item.id">
+          <option :value="item.id" x-text="item.name"></option>
+        </template>
+      </select>
+    </div>
+    <div class="mb-3">
+      <label for="client" class="form-label">Client type</label>
+      <select class="form-select" id="client">
+
+        <option value="TorBox" selected>TorBox</option>
+        {% if use_transmission %}
+        <option value="Transmission">Transmission</option>
+        {% endif %}
+      </select>
+    </div>
+    <div class="d-flex">
+      <button class="btn btn-primary ms-auto" :disabled="!canAdd"
+        @click="add_torrent(client.value, magnetValue, selectedTypeId)">Add</button>
+    </div>
+
+  </div>
+
+</body>
+
+</html>

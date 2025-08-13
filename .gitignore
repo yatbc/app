@@ -1,0 +1,15 @@
+yatc/tor/api.txt
+.idea/
+__pycache__/
+yatc/db.sqlite3
+main.py
+yatc/log.log
+production_files/
+dist
+test_data/
+aria2/
+data
+django_venv/
+.dev_env
+.env
+run_test.sh

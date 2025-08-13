@@ -1,0 +1,141 @@
+{% include 'includes/theme.html' %}
+{% load static %}
+{% include 'includes/head.html' %}
+
+<script src="{% static 'js/index.js' %}"></script>
+</head>
+
+<body>
+
+    {% include 'includes/navbar.html' %}
+
+    <h1>Torrents</h1>
+    <div x-data="getData()">
+        {% include 'includes/alert.html' %}
+
+        {% include 'includes/wait.html' %}
+
+        <table class="table table-striped">
+            <thead>
+                <tr>
+                    <th scope="col">Client</th>
+                    <th scope="col">Status</th>
+                    <th scope="col">Name</th>
+                    <th scope="col">Size</th>
+                    <th scope="col">Ratio</th>
+                    <th scope="col">Seeds</th>
+                    <th scope="col">Peers</th>
+                    <th scope="col">Created at</th>
+                    <th scope="col">Updated at</th>
+                    <th scope="col">Availability</th>
+                    <th scope="col">Details</th>
+                    <th scope="col">Actions</th>
+                </tr>
+            </thead>
+            <template x-if="torrents.length === 0">
+                <tr>
+                    <td colspan="12" class="text-center text-muted py-3">
+                        No torrents, add some to get started!
+                    </td>
+                </tr>
+            </template>
+
+            <template x-for="(entry, index) in torrents" :key="index">
+                <tbody>
+                    <tr>
+                        <td x-text="entry.torrent.client"></td>
+                        <td :class="{
+                    'text-success': entry.torrent.local_status_level == 'INFO',                    
+                    'text-warning': entry.torrent.local_status_level == 'WARNING',
+                    'text-danger': entry.torrent.local_status_level == 'ERROR'                    
+                }" x-text="entry.torrent.local_status"></td>
+                        <td :class="{
+                    'text-success': entry.torrent.download_finished,
+                    'text-primary': entry.history.seeds > 0,
+                    'text-warning': (entry.history.seeds == 0 || entry.torrent.doubled || entry.torrent.redownload) && entry.torrent.download_finished === false,
+                    'text-danger': entry.torrent.availability < 1,
+                    '': entry.torrent.active === true,
+                }" x-text="entry.torrent.name"></td>
+                        <!--      <td x-text="entry.torrent.deleted"></td>-->
+                        <!--      <td x-text="entry.torrent.download_finished"></td>-->
+                        <!--      <td x-text="entry.torrent.total_downloaded"></td>-->
+                        <td x-text="formatBytes(entry.torrent.size)"></td>
+                        <!--      <td x-text="entry.torrent.total_uploaded"></td>-->
+                        <td x-text="entry.history.ratio"></td>
+                        <td :class="{                    
+                    'text-danger': entry.history.seeds == 0 && entry.torrent.download_finished === false,                    
+                    '': !(entry.history.seeds == 0 && entry.torrent.download_finished === false),
+                }" x-text="entry.history.seeds"></td>
+                        <td x-text="entry.history.peers"></td>
+                        <td x-text="entry.torrent.created_at"></td>
+                        <td x-text="entry.history.updated_at"></td>
+                        <td :class="{                    
+                    'text-danger': entry.history.availability < 1 && entry.torrent.download_finished === false,                    
+                    '': !(entry.history.availability < 1 && entry.torrent.download_finished === false),
+                }" x-text="entry.history.availability"></td>
+                        <td><a :href="'torrent_details/' + entry.torrent.id">Show</a>
+                        </td>
+                        <td class="w-25">
+                            <span x-show="entry.torrent.redownload" class="text-warning">Redownload</span>
+                            <button type="button" class="btn btn-outline-danger btn-sm"
+                                @click="deleteTorrent(entry.torrent.id, index)" data-bs-toggle="tooltip"
+                                data-bs-placement="top"
+                                title="Removes torrent from torrent client and moves it to history. Does not remove downloaded files. If there are Aria active downloads, they will continue.">Delete
+                            </button>
+                            {% if use_transmission %}
+                            <button type="button" class="btn btn-outline-info btn-sm" x-show="!entry.torrent.doubled"
+                                data-bs-toggle="tooltip" data-bs-placement="top"
+                                title="Add selected torrent to second client"
+                                @click="doubleTorrent(entry.torrent.id)">Double
+                            </button>
+                            {% endif %}
+                            <select class="form-select" x-model="entry.torrent.torrent_type"
+                                :disabled="entry.torrent.local_download" data-bs-toggle="tooltip"
+                                data-bs-placement="top"
+                                title="Active only when torrent is still downloading in the client. Check Configuration/Folders for actions related to type."
+                                @change="handleSelection(entry.torrent.id, $event.target.value)">
+                                <template x-for="item in torrent_types" :key="item.id">
+                                    <option :value="item.id" x-text="item.name"
+                                        :selected="item.id == entry.torrent.torrent_type"></option>
+                                </template>
+                            </select>
+                        </td>
+                    </tr>
+                    <tr>
+
+                        <td colspan="12">
+                            <template x-if="entry.torrent.local_download">
+                                <div class="progress">
+                                    <div :class="{
+                    'progress-bar bg-success': entry.torrent.local_download_finished == true,
+                    'progress-bar': entry.torrent.local_download_finished == false
+                }" role="progressbar" :aria-valuenow="`${entry.torrent.local_download_progress*100}`" aria-valuemin="0"
+                                        aria-valuemax="100"
+                                        :style="{ width: `${entry.torrent.local_download_progress*100}%` }"
+                                        x-text="`${Math.round(entry.torrent.local_download_progress*100)}%`"></div>
+                                </div>
+                            </template>
+                            <template x-if="!entry.torrent.local_download">
+                                <div class="progress">
+                                    <div :class="{
+                    'progress-bar bg-success': entry.torrent.download_finished == true,
+                    'progress-bar': entry.torrent.download_finished == false && entry.history.availability >= 1,
+                    'progress-bar bg-danger': entry.history.availability < 1 && entry.torrent.download_finished == false
+                }" role="progressbar" :aria-valuenow="`${entry.history.progress*100}`" aria-valuemin="0"
+                                        aria-valuemax="100" :style="{ width: `${entry.history.progress*100}%` }"
+                                        x-text="`${Math.round(entry.history.progress*100)}%`"></div>
+                                </div>
+                            </template>
+
+                        </td>
+
+                    </tr>
+                </tbody>
+            </template>
+
+        </table>
+    </div>
+
+</body>
+
+</html>

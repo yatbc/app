@@ -1,0 +1,21 @@
+FROM debian:latest
+
+RUN apt-get update && apt-get upgrade -y && apt-get install -y \
+    libapache2-mod-wsgi-py3 \
+    python3-venv \
+    python3-pip 
+COPY ./yatbc /var/www/yatbc
+RUN groupadd -g 1000 yatbc
+RUN useradd -u 1000 -g 1000 -G www-data yatbc
+RUN mkdir -p /var/www/yatbc/wsgi && \
+    chown -R yatbc:yatbc /var/www/yatbc && \
+    chmod -R 755 /var/www/yatbc 
+
+RUN python3 -m venv /var/venv_django && \
+    . /var/venv_django/bin/activate && \
+    pip install --upgrade pip && \
+    pip install -r /var/www/yatbc/requirements.txt && \    
+    deactivate
+USER yatbc    
+WORKDIR /var/www/yatbc
+ENTRYPOINT [ "/var/venv_django/bin/python", "manage.py", "db_worker" ]

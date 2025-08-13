@@ -1,0 +1,13 @@
+<template x-if="alertVisible">
+    <div :class="{
+        'alert': true,
+        'alert-dismissible': true,        
+        'fade': true,
+        'show': true,
+        'alert-success': alertSuccess,
+        'alert-danger': !alertSuccess
+    }" role="alert">
+        <p x-text="alertText"></p>
+        <button type="button" class="btn-close" @click="alertVisible = false" aria-label="Close"></button>
+    </div>
+</template>

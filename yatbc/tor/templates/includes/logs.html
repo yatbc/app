@@ -1,0 +1,51 @@
+<table class="table  table-striped table-responsive" style="table-layout: fixed; width: 100%;">
+    <thead>
+        <tr>
+            <th scope="col" style="width: 200px;">Time</th>
+            <th scope="col" style="width: 100px;">Level</th>
+            <th scope="col" style="width: 100px;">Source</th>
+            <th scope="col">Message</th>
+            <th scope="col" style="width: 100px;">Related torrent</th>
+        </tr>
+    </thead>
+
+    <tbody>
+        <template x-if="log.length > 0">
+            <template x-for="entry in log" :key="index">
+
+                <tr>
+                    <td x-text="entry.created_at"></td>
+                    <td :class="{'text-danger': entry.level == 'ERROR', 'text-success': entry.level == 'INFO', 'text-warning': entry.level == 'WARNING' } "
+                        x-text="entry.level"></td>
+                    <td x-text="entry.source"></td>
+                    <td x-html="entry.message" class="text-break">
+                    </td>
+                    <td>
+                        <template x-if="entry.torrent_id">
+                            <a class="btn-info" :href="'/torrent_details/' + entry.torrent_id">Show</a>
+                        </template>
+                        <template x-if="!entry.torrent_id">
+                            <span class="text-info">No related torrent</span>
+                        </template>
+                    </td>
+                </tr>
+
+            </template>
+        </template>
+        <template x-if="log.length === 0 && !isLoading">
+            <tr>
+                <td colspan="5" class="text-center text-muted py-3">
+                    No logs found.
+                </td>
+            </tr>
+        </template>
+        <template x-if="log.length === 0 && isLoading">
+            <tr>
+                <td colspan="5" class="text-center text-muted py-3">
+                    Loading logs...
+                </td>
+            </tr>
+        </template>
+    </tbody>
+
+</table>

@@ -1,0 +1,30 @@
+{% include 'includes/theme.html' %}
+{% load static %}
+{% include 'includes/head.html' %}
+<script src="{% static 'js/error.js' %}"></script>
+
+</head>
+
+<body>
+  {% include 'includes/navbar.html' %}
+
+  <h1>Log:</h1>
+  <p><strong>Note:</strong> Includes entries for last 30 days</p>
+  <div x-data="getData()">
+    {% csrf_token %}
+    {% include 'includes/alert.html' %}
+    {% include 'includes/wait.html' %}
+    <div class="mb-3">
+      <button class="btn btn-primary ms-auto" @click="deleteLogs()">Delete logs older than 14 days</button>
+      <button class="btn btn-danger ms-auto" @click="deleteLogs('all')">Delete all logs</button>
+    </div>
+    {% include 'includes/logs.html' %}
+    <div class="mb-3">
+      <button class="btn btn-primary ms-auto" @click="deleteLogs()">Delete logs older than 14 days</button>
+      <button class="btn btn-danger ms-auto" @click="deleteLogs('all')">Delete all logs</button>
+    </div>
+  </div>
+
+</body>
+
+</html>

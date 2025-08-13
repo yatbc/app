@@ -1,0 +1,8 @@
+<template x-if="isLoading || lastRequestId">
+  <div class="d-flex justify-content-center align-items-center mb-3">
+    <div class="spinner-border text-primary me-2" role="status">
+      <span class="visually-hidden">Please wait...</span>
+    </div>
+    <strong :class="wait_class" x-html="wait_text"></strong>
+  </div>
+</template>

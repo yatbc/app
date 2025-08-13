@@ -1,0 +1,272 @@
+{% include 'includes/theme.html' %}
+{% load static %}
+{% include 'includes/head.html' %}
+<script src="{% static 'js/config.js' %}"></script>
+</head>
+
+<body>
+  {% if not show_on_start %}
+  {% include 'includes/navbar.html' %}
+  <script>const globalFirstRun = false;</script>
+  {% endif %}
+  {% csrf_token %}
+  <h1>Configuration</h1>
+  <div x-data="get_config()">
+    {% include 'includes/alert.html' %}
+    {% include 'includes/wait.html' %}
+    {% if show_on_start %}
+    <script>const globalFirstRun = true;</script>
+    <p>
+      <strong>Note:</strong> It seems that, this is the first time you are
+      using YATBC web application. Please
+      configure the settings below to get started.
+    </p>
+    <p>
+      This application is a client for the TorBox. It has similar functionality as native client, but is self-hosted and
+      allows for automation of
+      downloading files from the TorBox, and storing them in folders according to your preferences.
+    </p>
+    <p>
+      <strong>TLDR:</strong> YATBC automates workflow of using TorBox, downloading files to local drive and
+      moving/coping them when done
+    </p>
+    <h2>Main features:</h2>
+    <ul>
+      <li>Download files from the TorBox using Aria2.</li>
+      <li>Store downloaded files in folders according to your preferences.</li>
+      <li>Manages history, helps to determine if you already have "this" file.</li>
+      <li>Tries to inform the user about actions taken via logs related to files.</li>
+      <!--<li>Use Transmission as a backup client.</li>-->
+      <!--<li>Basic functionality similar to common *arr stacks</li>-->
+    </ul>
+    {% endif %}
+
+    <ul class="nav nav-tabs" id="configTab" role="tablist">
+      <li class="nav-item" role="presentation">
+        <button class="nav-link active" id="torbox-tab" data-bs-toggle="tab" data-bs-target="#torbox" type="button"
+          role="tab" aria-controls="torbox" aria-selected="true">TorBox</button>
+      </li>
+      <li class="nav-item" role="presentation">
+        <button class="nav-link" id="aria-tab" data-bs-toggle="tab" data-bs-target="#aria" type="button" role="tab"
+          aria-controls="aria" aria-selected="false">Aria</button>
+      </li>
+      <li class="nav-item" role="presentation">
+        <button class="nav-link" id="transmission-tab" data-bs-toggle="tab" data-bs-target="#transmission" type="button"
+          role="tab" aria-controls="transmission" aria-selected="false">Transmission</button>
+      </li>
+      <li class="nav-item" role="presentation">
+        <button class="nav-link" id="miscellaneous-tab" data-bs-toggle="tab" data-bs-target="#miscellaneous"
+          type="button" role="tab" aria-controls="miscellaneous" aria-selected="false">Miscellaneous</button>
+      </li>
+      <li class="nav-item" role="presentation">
+        <button class="nav-link" id="folders-tab" data-bs-toggle="tab" data-bs-target="#folders" type="button"
+          role="tab" aria-controls="folders" aria-selected="false">Folders</button>
+      </li>
+    </ul>
+    <div class="tab-content" id="configTabContent">
+      <div class="tab-pane fade show active" id="torbox" role="tabpanel" aria-labelledby="torbox-tab">
+        <h2>TorBox settings</h2>
+
+        <strong>Note:</strong> You can find your TorBox API key in the
+        TorBox web interface.
+        <div class="mb-3">
+          <label for="torbox_apikey" class="form-label">
+            TorBox API key(leave empty if you don't want to update it):
+          </label>
+          <input class="form-control" id="torbox_apikey" type="text" x-model="torbox_api_key_value"
+            :class="{ 'is-invalid': torbox_api_valid === false, 'is-valid': torbox_api_valid === true }"
+            :placeholder="configuration.TORBOX_API_KEY_SET ? 'TorBox API Key is set' : 'Please input TorBox API Key'" />
+        </div>
+        <div class="mb-3">
+          <label for="torbox_host" class="form-label">
+            TorBox host:
+          </label>
+          <input class="form-control" id="torbox_host" type="text" x-model="configuration.TORBOX_HOST"
+            :class="{ 'is-invalid': torbox_host_valid === false, 'is-valid': torbox_host_valid  === true }" />
+        </div>
+        <div class="mb-3">
+          <label for="torbox_api" class="form-label">
+            TorBox api(Api part of TorBox host, e.g. if full host for api is https://api.torbox.app, then this should be
+            "api"):
+          </label>
+          <input class="form-control" id="torbox_api" type="text" x-model="configuration.TORBOX_API"
+            :class="{ 'is-invalid': torbox_host_valid === false , 'is-valid': torbox_host_valid === true }" />
+        </div>
+        <div class="mb-3">
+          <label for="torbox_search_api" class="form-label">
+            TorBox search api(Search Api part of TorBox host, e.g. if full host for search api is
+            https://search-api.torbox.app, then this should be "search-api"):
+          </label>
+          <input class="form-control" id="torbox_search_api" type="text" x-model="configuration.TORBOX_SEARCH_API" />
+        </div>
+        <div class="mb-3">
+          <button class="btn btn-secondary ms-auto" @click="validateTorBox()">Validate TorBox</button>
+        </div>
+      </div>
+      <div class="tab-pane fade" id="aria" role="tabpanel" aria-labelledby="aria-tab">
+        <h2>Aria 2 settings</h2>
+        <div class="mb-3">
+          <label for="aria_host" class="form-label">Aria host:</label>
+          <input class="form-control" id="aria_host" type="text" x-model="configuration.ARIA2_HOST"
+            :class="{ 'is-invalid': aria2_host_valid === false, 'is-valid': aria2_host_valid === true }" />
+        </div>
+        <div class="mb-3">
+          <label for="aria_port" class="form-label">Aria port:</label>
+          <input class="form-control" id="aria_port" type="text" x-model="configuration.ARIA2_PORT"
+            :class="{ 'is-invalid': aria2_port_valid === false, 'is-valid': aria2_port_valid === true }" />
+        </div>
+        <div class="mb-3">
+          <label for="aria_password" class="form-label">
+            Aria secret (by default, docker-compose fills the configuration, leave empty if you don't want to update
+            it):
+          </label>
+          <input class="form-control" id="aria_password" type="password" x-model="aria_password_value"
+            :class="{ 'is-invalid': aria2_password_valid === false, 'is-valid': aria2_password_valid === true }"
+            :placeholder="configuration.ARIA2_SECRET_SET ? 'Aria secret is set' : 'Please input Aria secret if required'" />
+        </div>
+        <div class="mb-3">
+          <label for="aria_dir" class="form-label">
+            Aria download directory:
+          </label>
+          <input class="form-control" id="aria_dir" type="input" x-model="configuration.ARIA2_DIR"
+            :class="{ 'is-invalid': aria2_dir_valid === false, 'is-valid': aria2_dir_valid === true }" />
+        </div>
+        <div class="mb-3">
+          <button class="btn btn-secondary ms-auto" @click="validateAria()">Validate Aria</button>
+        </div>
+      </div>
+      <div class="tab-pane fade" id="transmission" role="tabpanel" aria-labelledby="transmission-tab">
+        <h2>Transmission settings</h2>
+        {% include 'includes/dragons.html' %}
+        <div class="mb-3">
+          <label for="use_transmission" class="form-label">
+            Use Transmission as backup client(YATC doesn't support TorBox's queues, so if you want to download more
+            files then you have support in your TorBox plan, then you can use Transmission as a backup client):
+          </label>
+          <input id="use_transmission" type="checkbox" x-model="configuration.USE_TRANSMISSION" />
+        </div>
+        <div class="mb-3">
+          <label for="transmission_host" class="form-label">
+            Transmission host (required if using Transmission):
+          </label>
+          <input class="form-control" id="transmission_host" type="text" x-model="configuration.TRANSMISSION_HOST"
+            :class="{ 'is-invalid': transmission_host_valid === false, 'is-valid': transmission_host_valid === true }" />
+        </div>
+        <div class="mb-3">
+          <label for="transmission_dir" class="form-label">
+            Where does Transmission store downloaded files?:
+          </label>
+          <input class="form-control" id="transmission_dir" type="text" x-model="configuration.TRANSMISSION_DIR"
+            :class="{ 'is-invalid': transmission_dir_valid === false, 'is-valid': transmission_dir_valid === true }" />
+        </div>
+        <div class="mb-3">
+          <label for="transmission_port" class="form-label">
+            Transmission port (required if using Transmission):
+          </label>
+          <input class="form-control" id="transmission_port" type="text" x-model="configuration.TRANSMISSION_PORT"
+            :class="{ 'is-invalid': transmission_port_valid === false, 'is-valid': transmission_port_valid === true }" />
+        </div>
+        <div class="mb-3">
+          <label for="transmission_user" class="form-label">
+            Transmission user (required only if Transmission is password
+            protected):
+          </label>
+          <input class="form-control" id="transmission_user" type="text" x-model="configuration.TRANSMISSION_USER"
+            :class="{ 'is-invalid': transmission_user_valid === false, 'is-valid': transmission_user_valid === true }" />
+        </div>
+        <div class="mb-3">
+          <label for="transmission_password" class="form-label">
+            Transmission password (required only if Transmission is password
+            protected, leave empty if you don't want to update it):
+          </label>
+          <input class="form-control" id="transmission_password" type="password" x-model="transmission_password_value"
+            :class="{ 'is-invalid': transmission_password_valid === false, 'is-valid': transmission_password_valid === true }"
+            :placeholder="configuration.TRANSMISSION_PASSWORD_SET ? 'Transmission password is set' : 'Please input Transmission password if required'" />
+        </div>
+        <div class="mb-3">
+          <button class="btn btn-secondary ms-auto" @click="validateTransmission()">Validate Transmission</button>
+        </div>
+      </div>
+      <div class="tab-pane fade" id="miscellaneous" role="tabpanel" aria-labelledby="miscellaneous-tab">
+        <h2>Miscellaneous settings</h2>
+        <div class="mb-3">
+          <label for="use_dark" class="form-label">
+            Use dark theme(After saving, reload the page to apply the theme):
+          </label>
+          <input id="use_dark" type="checkbox" x-model="configuration.USE_DARK" />
+        </div>
+        <div class="mb-3">
+          <label for="use_cdn" class="form-label">
+            <strong class="text-danger">Use CDN versions of Bootstrap, Alpine.js etc, Warning: disable this only if you
+              manually provided required scripts.</strong>:
+          </label>
+          <input id="use_cdn" type="checkbox" x-model="configuration.USE_CDN" />
+        </div>
+        {% if not show_on_start %}
+        <div class="mb-3">
+          <label for="add_referral" class="form-label">
+            Are you enjoying YATBC? Please consider adding referal to your TorBox account.
+          </label>
+          <button id="add_referral" class="btn btn-info ms-auto" @click="addReferral()">Add referal</button>
+        </div>
+        {% endif %}
+        <div class="mb-3">
+          <label for="test_ip" class="form-label">
+            Public IP from YATBC(if you are using VPN and whant to make sure that your IP is correct, using external
+            service: http://ip-api.com/json/?fields=status,message,query,isp,org):
+          </label>
+          <input id="test_ip" x-model="test_ip" class="form-control" type="text" readonly />
+          <label for="test_isp" class="form-label">
+            Public ISP from YATBC:
+          </label>
+          <input id="test_isp" x-model="test_isp" class="form-control" type="text" readonly />
+          <button class="btn btn-secondary ms-auto" @click="testIp()">Test IP</button>
+        </div>
+      </div>
+
+      <div class="tab-pane fade" id="folders" role="tabpanel" aria-labelledby="folders-tab">
+        <h2>Folders settings</h2>
+        <p><strong>Change folder paths only if you are running outside of docker or you changed volume directories
+            on container in
+            docker-compose file.</strong></p>
+        <template x-for="type in torrent_types" :key="index">
+          <div class="card mb-3">
+            <div class="card-header">
+              <span x-text="type.name"></span>
+            </div>
+            <div class="card-body">
+              <label class="form-check-label" :for="`radio-${type.id}-Copy`">Copy on finish:</label>
+              <input class="form-check-input" type="radio" :name="`radio-${type.id}`" :id="`radio-${type.id}-Copy`"
+                value="Copy" x-model="type.action_on_finish" />
+              <label class="form-check-label" :for="`radio-${type.id}-Move`">Move on finish:</label>
+              <input class="form-check-input" type="radio" :name="`radio-${type.id}`" :id="`radio-${type.id}-Move`"
+                value="Move" x-model="type.action_on_finish" />
+              <label class="form-check-label" :for="`radio-${type.id}-Nothing`">Do nothing:</label>
+              <input class="form-check-input" type="radio" :name="`radio-${type.id}`" :id="`radio-${type.id}-Nothing`"
+                value="Nothing" x-model="type.action_on_finish" />
+              <input class="form-control" type="text" :id="`folder-${type.id}`" x-model="type.target_dir"
+                placeholder="Target folder(copy or move)"
+                :class="{ 'is-invalid': folders_valid[type.id] === false, 'is-valid': folders_valid[type.id] === true }" />
+            </div>
+          </div>
+        </template>
+        <div class="mb-3">
+          <button class="btn btn-secondary ms-auto" @click="validateFolders()">Validate folders</button>
+        </div>
+      </div>
+
+
+    </div>
+
+
+
+
+
+    <div class="mb-3"></div>
+    <div class="d-flex">
+      <button class="btn btn-primary ms-auto" @click="saveConfig()">Save</button>
+    </div>
+  </div>
+</body>
+
+</html>

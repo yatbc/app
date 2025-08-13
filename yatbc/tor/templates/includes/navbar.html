@@ -1,0 +1,48 @@
+<nav class="navbar navbar-expand-lg bg-body-tertiary">
+  <div class="container-fluid">
+    <a class="navbar-brand" href="/">Status</a>
+    <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarSupportedContent"
+      aria-controls="navbarSupportedContent" aria-expanded="false" aria-label="Toggle navigation">
+      <span class="navbar-toggler-icon"></span>
+    </button>
+    <div class="collapse navbar-collapse" id="navbarSupportedContent">
+      <ul class="navbar-nav me-auto mb-2 mb-lg-0">
+        <li class="nav-item">
+          <a class="nav-link active" href="/add_torrent">Add</a>
+        </li>
+        <li class="nav-item">
+          <a class="nav-link active" href="/config">Config</a>
+        </li>
+        <li class="nav-item">
+          <a class="nav-link active" href="/history">History</a>
+        </li>
+        <li class="nav-item">
+          <a class="nav-link active" href="/log">Log</a>
+        </li>
+        <li class="navbar-text ms-2 me-2 text-muted">
+          {% include "includes/version.html" %}
+        </li>
+      </ul>
+      <div class="d-flex align-items-center w-50" role="search" x-data="commonSearchValidator()">
+        <label class="me-2 form-label flex-shrink-0" for="query">IMDB ID for torrent to find:</label>
+
+        <input type="text" class="form-control me-2 flex-grow-1" id="query" name="query" x-model="$store.appState.query"
+          @input="validateInput()" :class="{ 'is-invalid': !isValid && $store.appState.query.length > 0,
+        'is-valid': isValid && $store.appState.query.length > 0 }" placeholder="e.g., tt1234567/S1/E2" x-init="const searchTorrent = 'search_torrent/'; 
+          const path = window.location.pathname;
+        if(path.search(searchTorrent)>0){
+        const parts = path.split(searchTorrent); 
+        let result = ''; 
+        if(parts.length > 1) { 
+        result = parts[1]; 
+        } 
+        $store.appState.query = result; 
+        $nextTick(() => validateInput()); } " />
+        <button class="btn btn-primary me-2" @click="window.location.href = `/search_torrent/${$store.appState.query}`"
+          :disabled="!isValid">
+          Search
+        </button>
+      </div>
+    </div>
+  </div>
+</nav>
