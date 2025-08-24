@@ -23,7 +23,10 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = False
+if os.environ.get("RUN_DEBUG") == "true":
+    DEBUG = True
+else:
+    DEBUG = False
 if DEBUG:
     PERSISTENT_DIR = BASE_DIR / "data" / "persistent"
 else:

@@ -23,12 +23,13 @@ jobs:
 
       - name: Prepare
         working-directory: ./yatbc
+        env:
+          RUN_DEBUG: "true"
         run: |
-
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install coverage
-          PERSISTENT_DIR=/data/persistent
+          PERSISTENT_DIR=data/persistent
           mkdir -p $PERSISTENT_DIR
 
           DJANGO_SECRET=$(python3 -c 'import secrets; print(secrets.token_urlsafe(50))')
@@ -39,10 +40,14 @@ jobs:
 
       - name: Run Tests with Coverage
         working-directory: ./yatbc
+        env:
+          RUN_DEBUG: "true"
         run: |
           coverage run manage.py test "tor.tests"
 
       - name: Generate Coverage Report
         working-directory: ./yatbc
+        env:
+          RUN_DEBUG: "true"
         run: |
           coverage report
