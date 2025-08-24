@@ -51,3 +51,11 @@ jobs:
           RUN_DEBUG: "true"
         run: |
           coverage report
+          coverage html
+          zip -r coverage.zip htmlcov/
+
+      - name: Upload HTML Report as Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-html-report
+          path: yatbc/coverage.zip
