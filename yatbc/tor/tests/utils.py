@@ -1,5 +1,29 @@
-from ..models import Torrent, TorrentFile, TorrentType, AriaDownloadStatus
+from ..models import (
+    Torrent,
+    TorrentFile,
+    TorrentType,
+    AriaDownloadStatus,
+    TorrentStatus,
+)
+import shutil
+from pathlib import Path
 from ..torboxapi import TORBOX_CLIENT
+
+
+def create_work_dir(name="./test/"):
+    work_dir = Path("./test/")
+    shutil.rmtree(work_dir, ignore_errors=True)
+    work_dir.mkdir()
+    return work_dir
+
+
+def create_file(file_name, work_dir=None):
+    if not work_dir:
+        work_dir = create_work_dir()
+    file_path = work_dir / file_name
+    with open(file_path, "w") as file:
+        file.write("Test line")
+    return file_path, work_dir
 
 
 def create_torrent_file(torrent, aria=None, internal_id="asd1"):
@@ -7,7 +31,7 @@ def create_torrent_file(torrent, aria=None, internal_id="asd1"):
         torrent=torrent,
         aria=aria,
         name="Test",
-        short_name="Shor test name",
+        short_name="Short test name",
         size=123,
         hash="hash",
         mime_type="Mime",
@@ -39,4 +63,5 @@ def create_torrent(
         local_download_progress=0.0,
         redownload=False,
         torrent_type=torrent_type,
+        local_status=TorrentStatus.objects.get(name="Unknown"),
     )

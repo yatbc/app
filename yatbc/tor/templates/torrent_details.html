@@ -41,43 +41,64 @@
       <div class="tab-pane fade show active" id="details" role="tabpanel" aria-labelledby="details-tab">
         <h2>Details:</h2>
         <div class="row mb-3">
-          <div class="col-md-1 col-sm-5 fw-bold text-muted">Name:</div>
+          <div class="col-md-2 col-sm-5 fw-bold text-muted">Name:</div>
           <div class="col-md-7 col-sm-7 text-break" x-text="torrent.name"></div>
         </div>
         <div class="row mb-3">
-          <div class="col-md-1 col-sm-5 fw-bold text-muted">Created at:</div>
+          <div class="col-md-2 col-sm-5 fw-bold text-muted">Client:</div>
+          <div class="col-md-7 col-sm-7 text-break" x-text="torrent.client"></div>
+        </div>
+        <div class="row mb-3">
+          <div class="col-md-2 col-sm-5 fw-bold text-muted">Private:</div>
+          <div class="col-md-7 col-sm-7 text-break" x-text="torrent.private"></div>
+        </div>
+        <div class="row mb-3">
+          <div class="col-md-2 col-sm-5 fw-bold text-muted">Cached:</div>
+          <div class="col-md-7 col-sm-7 text-break" x-text="torrent.cached"></div>
+        </div>
+        <div class="row mb-3">
+          <div class="col-md-2 col-sm-5 fw-bold text-muted">Remote client added at:</div>
           <div class="col-md-7 col-sm-7 text-break" x-text="torrent.created_at"></div>
         </div>
         <div class="row mb-3">
-          <div class="col-md-1 col-sm-5 fw-bold text-muted">Updated at:</div>
+          <div class="col-md-2 col-sm-5 fw-bold text-muted">Remote client last update at:</div>
           <div class="col-md-7 col-sm-7 text-break" x-text="history.updated_at"></div>
         </div>
         <div class="row mb-3">
-          <div class="col-md-1 col-sm-5 fw-bold text-muted">Magnet:</div>
+          <div class="col-md-2 col-sm-5 fw-bold text-muted">Action on finish done at:</div>
+          <div class="col-md-7 col-sm-7 text-break" x-text="torrent.finished_at ? torrent.finished_at : 'Not done'">
+          </div>
+        </div>
+        <div class="row mb-3">
+          <div class="col-md-2 col-sm-5 fw-bold text-muted">Magnet:</div>
           <div class="col-md-7 col-sm-7 text-break" x-text="torrent.magnet"></div>
         </div>
         <div class="row mb-3">
-          <div class="col-md-1 col-sm-5 fw-bold text-muted">Size:</div>
+          <div class="col-md-2 col-sm-5 fw-bold text-muted">Hash:</div>
+          <div class="col-md-7 col-sm-7 text-break" x-text="torrent.hash"></div>
+        </div>
+        <div class="row mb-3">
+          <div class="col-md-2 col-sm-5 fw-bold text-muted">Size:</div>
           <div class="col-md-7 col-sm-7 text-break" x-text="formatBytes(torrent.size)"></div>
         </div>
         <div class="row mb-3">
-          <div class="col-md-1 col-sm-5 fw-bold text-muted">Total uploaded:</div>
+          <div class="col-md-2 col-sm-5 fw-bold text-muted">Total uploaded:</div>
           <div class="col-md-7 col-sm-7 text-break" x-text="formatBytes(torrent.total_uploaded)"></div>
         </div>
         <div class="row mb-3">
-          <div class="col-md-1 col-sm-5 fw-bold text-muted">Ratio:</div>
+          <div class="col-md-2 col-sm-5 fw-bold text-muted">Ratio:</div>
           <div class="col-md-7 col-sm-7 text-break" x-text="history.ratio"></div>
         </div>
         <div class="row mb-3">
-          <div class="col-md-1 col-sm-5 fw-bold text-muted">Type:</div>
+          <div class="col-md-2 col-sm-5 fw-bold text-muted">Type:</div>
           <div class="col-md-7 col-sm-7 text-break" x-text="torrent_type.name"></div>
         </div>
         <div class="row mb-3">
-          <div class="col-md-1 col-sm-5 fw-bold text-muted">Action on finish:</div>
+          <div class="col-md-2 col-sm-5 fw-bold text-muted">Action on finish:</div>
           <div class="col-md-7 col-sm-7 text-break" x-text="torrent_type.action_on_finish"></div>
         </div>
         <div class="row mb-3">
-          <div class="col-md-1 col-sm-5 fw-bold text-muted">Target folder for action:</div>
+          <div class="col-md-2 col-sm-5 fw-bold text-muted">Target folder for action:</div>
           <div class="col-md-7 col-sm-7 text-break" x-text="torrent_type.target_dir"></div>
         </div>
       </div>

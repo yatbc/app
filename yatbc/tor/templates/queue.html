@@ -1,0 +1,92 @@
+{% include 'includes/theme.html' %}
+{% load static %}
+{% include 'includes/head.html' %}
+<script src="{% static 'js/queue.js' %}"></script>
+
+</head>
+
+<body>
+    {% include 'includes/navbar.html' %}
+
+    <h1>Queue:</h1>
+    <div x-data="getData()">
+        {% csrf_token %}
+        {% include 'includes/confirm.html' %}
+        {% include 'includes/alert.html' %}
+        {% include 'includes/wait.html' %}
+
+        <table class="table  table-striped table-responsive" style="table-layout: fixed; width: 100%;">
+            <thead>
+                <tr>
+                    <th scope="col" style="width: 300px;">Added at</th>
+                    <th scope="col" style="width: 100px;">Priority</th>
+                    <th scope="col" style="width: 300px;">Torrent type</th>
+                    <th scope="col">Magnet/Torrent</th>
+                    <th scope="col" style="width: 100px;">Actions</th>
+                </tr>
+            </thead>
+
+            <tbody>
+                <template x-if="queue.length > 0">
+                    <template x-for="entry in queue" :key="index">
+                        <tr>
+                            <td x-text="entry.added_at" class="text-break"></td>
+                            <td x-text="entry.priority"></td>
+                            <td>
+                                <select class="form-select" x-model="entry.torrent_type_id"
+                                    @change="handleSelection(entry.id, $event.target.value)">
+                                    <template x-for="item in torrent_types" :key="item.id">
+                                        <option :value="item.id" x-text="item.name"
+                                            :selected="item.id == entry.torrent_type_id"></option>
+                                    </template>
+                                </select>
+
+                            </td>
+
+                            <td>
+                                <template x-if="queue.torrent_private">
+                                    <div class="btn btn-primary btn-sm disabled" role="status" aria-disabled="true">
+                                        Private
+                                    </div>
+                                </template>
+                                <template x-if="entry.torrent_file">
+                                    <span x-text="entry.torrent_file" class="text-break"></span>
+                                </template>
+                                <template x-if="entry.magnet">
+                                    <span x-text="entry.magnet" class="text-break"></span>
+                                </template>
+                            </td>
+                            <td>
+                                <div class="d-flex">
+                                    <button type="button" class="btn btn-outline-danger btn-sm"
+                                        @click="deleteQueue('single', entry.id)">Remove</button>
+                                </div>
+                            </td>
+
+                        </tr>
+
+                    </template>
+                </template>
+                <template x-if="queue.length === 0 && !isLoading">
+                    <tr>
+                        <td colspan="5" class="text-center text-muted py-3">
+                            Queue is empty.
+                        </td>
+                    </tr>
+                </template>
+                <template x-if="queue.length === 0 && isLoading">
+                    <tr>
+                        <td colspan="5" class="text-center text-muted py-3">
+                            Loading queue...
+                        </td>
+                    </tr>
+                </template>
+            </tbody>
+
+        </table>
+
+    </div>
+
+</body>
+
+</html>

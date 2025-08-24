@@ -3,9 +3,10 @@
         <tr>
             <th scope="col">Name</th>
             <th scope="col" style="width: 100px;">Mime type</th>
-            <th scope="col" style="width: 100px;">Aria status</th>
+            <th scope="col" style="width: 100px;">Local download status</th>
+            <th scope="col" style="width: 120px;">Local download finished at</th>
             <th scope="col" style="width: 100px;">Action status</th>
-            <th scope="col" style="width: 100px;">Aria error</th>
+            <th scope="col" style="width: 100px;">Local download error</th>
         </tr>
     </thead>
 
@@ -17,6 +18,7 @@
                     <td x-text="entry.name" class="text-break"></td>
                     <td x-text="entry.mime_type"></td>
                     <td x-text="entry.aria.status"></td>
+                    <td x-text="entry.aria.finished_at ? entry.aria.finished_at : 'Not done'" class="text-break"></td>
                     <td x-text="entry.action_on_finish_done ? 'Done' : 'Waiting'"></td>
                     <td x-text="entry.aria.error ? entry.aria.error : 'No Error'"></td>
 
@@ -26,14 +28,14 @@
         </template>
         <template x-if="files.length === 0 && !isLoading">
             <tr>
-                <td colspan="5" class="text-center text-muted py-3">
+                <td colspan="6" class="text-center text-muted py-3">
                     No files found. Waiting for TorBox to finish downloading.
                 </td>
             </tr>
         </template>
         <template x-if="files.length === 0 && isLoading">
             <tr>
-                <td colspan="5" class="text-center text-muted py-3">
+                <td colspan="6" class="text-center text-muted py-3">
                     Loading...
                 </td>
             </tr>

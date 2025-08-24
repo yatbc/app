@@ -1,0 +1,24 @@
+<div class="modal" :class="{ 'd-block': showModal }" tabindex="-1" role="dialog" aria-modal="true" x-show="showModal"
+    @click.outside="showModal = false" style="display: none;">
+    <div class="modal-dialog modal-dialog-centered modal-lg" role="document">
+        <div class="modal-content rounded-2 shadow">
+            <div class="modal-header border-bottom-0">
+                <h1 class="modal-title fs-5" x-text="dialogConfirmHeader"></h1>
+                <button type="button" class="btn-close" aria-label="Close" @click="showModal = false"></button>
+            </div>
+            <div class="modal-body py-4">
+                <p x-html="dialogConfirmBody" class="text-break"></p>
+            </div>
+            <div class="modal-footer d-flex justify-content-end w-100 gap-2 pb-3 border-top-0">
+                <button type="button" class="btn btn-lg btn-secondary" @click="showModal = false">
+                    Cancel
+                </button>
+
+                <button type="button" class="btn btn-lg btn-danger"
+                    @click="dialogConfirmCallback(); showModal = false;">
+                    Confirm
+                </button>
+            </div>
+        </div>
+    </div>
+</div>

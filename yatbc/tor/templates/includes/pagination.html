@@ -1,0 +1,10 @@
+<div class="d-flex justify-content-center w-100 gap-2 pb-3">
+    <button type="button" :disabled="currentIndex <= 0" class="btn btn-sm btn-secondary"
+        @click="loadPreviousPageCallback()">
+        &lt;&lt;&lt; </button>
+
+    <button type="button" :disabled="pageCurrentItems < step" class="btn btn-sm btn-secondary"
+        @click="loadNextPageCallback()">
+        &gt;&gt;&gt;
+    </button>
+</div>

@@ -1,6 +1,6 @@
 function getData() {
   return {
-    ...commonCallApi(),
+    ...commonPagination(),
     history: [],
     torrent_types: [],
     fetchTorrentTypes() {
@@ -23,33 +23,47 @@ function getData() {
         (onSuccess = (json) => {
           console.log("Fetched:", json);
           this.history = json.history;
+          this.pageCurrentItems = this.history.length;
           this.updateTooltips();
         }),
         (onError = null)
       );
     },
     deleteHistory(command = "older", torrent_id = null) {
-      this.isLoading = true;
+
       body = { command: command }
       if (torrent_id) {
         body["torrent_id"] = torrent_id;
       }
-      this.callApi(
-        (api = "/api/delete_history"),
-        (errorMessage = "Failed to delete history"),
-        (successMessage = "History deleted successfully"),
-        (method = "POST"),
-        (body = body),
-        (onSuccess = () => {
-          this.isLoading = false;
-          this.fetchData();
-        }),
-        (onError = () => {
-          this.isLoading = false;
-        })
-      );
+      this.dialogConfirmBody = "Are you sure you want to delete history item(s)?";
+      this.dialogConfirmHeader = "Confirm delete";
+      this.dialogConfirmCallback = () => {
+        this.isLoading = true;
+        this.callApi(
+          (api = "/api/delete_history"),
+          (errorMessage = "Failed to delete history"),
+          (successMessage = "History deleted successfully"),
+          (method = "POST"),
+          (body = body),
+          (onSuccess = () => {
+            this.isLoading = false;
+            this.fetchData();
+          }),
+          (onError = () => {
+            this.isLoading = false;
+          })
+        );
+      };
+      this.showModal = true;
+
     },
     init() {
+      this.paginatedPageApi = "/api/get_history";
+      this.paginationNewDataCallback = (json) => {
+        this.history = json.history;
+        this.pageCurrentItems = this.history.length;
+        this.updateTooltips();
+      }
       this.initBootstrapHints();
       this.fetchTorrentTypes();
 

@@ -4,6 +4,7 @@ function getData() {
     torrents: [],
     summary: [],
     torrent_types: [],
+    queue_size: 0,
 
     fetchData() {
       fetch(`api/get_torrents_list`)
@@ -15,6 +16,7 @@ function getData() {
           }
           this.torrents = data.torrents;
           this.summary = data.summary;
+          this.queue_size = data.queue_size
           console.log(this.torrents);
           console.log(this.torrent_types);
           this.updateTooltips();
@@ -30,7 +32,7 @@ function getData() {
         });
     },
     init() {
-
+      this.isLoading = true;
       this.initBootstrapHints();
       this.setupSSE(
         (update_action = () => {
@@ -49,7 +51,7 @@ function getData() {
     },
     handleSelection(torrentId, newTorrentTypeId) {
       console.log(
-        `TorrentType ID: ${torrentId}, newTorrentTypeId: ${newTorrentTypeId}`
+        `Torrent ID: ${torrentId}, newTorrentTypeId: ${newTorrentTypeId}`
       );
       this.callApi(
         `/api/update_torrent_type/${torrentId}/${newTorrentTypeId}`,
@@ -62,9 +64,14 @@ function getData() {
     },
 
     deleteTorrent(id, index) {
-      this.showAlert("Torrent scheduled for deletion");
-      this.changeTorrent("delete", id);
-      this.torrents.splice(index, 1);
+      this.dialogConfirmBody = "Are you sure you want to delete:<br/>'" + this.torrents[index].torrent.name + "'?";
+      this.dialogConfirmHeader = "Confirm delete";
+      this.dialogConfirmCallback = () => {
+        this.showAlert("Torrent scheduled for deletion");
+        this.changeTorrent("delete", id);
+        this.torrents.splice(index, 1);
+      };
+      this.showModal = true;
     },
     doubleTorrent(id) {
       this.callApi(

@@ -11,6 +11,9 @@
           <a class="nav-link active" href="/add_torrent">Add</a>
         </li>
         <li class="nav-item">
+          <a class="nav-link active" href="/queue">Queue</a>
+        </li>
+        <li class="nav-item">
           <a class="nav-link active" href="/config">Config</a>
         </li>
         <li class="nav-item">
@@ -20,7 +23,7 @@
           <a class="nav-link active" href="/log">Log</a>
         </li>
         <li class="navbar-text ms-2 me-2 text-muted">
-          {% include "includes/version.html" %}
+          <a href="https://github.com/yatbc/app/releases" target="_blank">{% include "includes/version.html" %}</a>
         </li>
       </ul>
       <div class="d-flex align-items-center w-50" role="search" x-data="commonSearchValidator()">

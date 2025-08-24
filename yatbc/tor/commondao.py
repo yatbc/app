@@ -1,20 +1,20 @@
 from .models import (
     Torrent,
-    TorrentTorBoxSearchResult,
+    Level,
     TorrentType,
     ErrorLog,
     TorrentErrorLog,
     TorrentFile,
+    TorrentStatus,
     TorrentHistory,
 )
-from django.db.models import Q
+from django.db.models import Q, OuterRef, Subquery
 import re
 import logging
 from django.db import connection
+from django.utils import timezone
 import bleach
-
-TORBOX_CLIENT = "TorBox"
-TRANSMISSION_CLIENT = "Transmission"
+from .common import TRANSMISSION_CLIENT, TORBOX_CLIENT
 
 
 def clean_html(html):
@@ -49,51 +49,21 @@ def torrent_file_to_log(file: TorrentFile):
     return f"<i>'{name}'(id: {file.id})</i><br/>"
 
 
-def add_log(message, level="INFO", source=None, torrent=None, local_status=None):
+def add_log(message, level, source=None, torrent=None, local_status=None):
     logger = logging.getLogger("torbox")
     log = ErrorLog.objects.create(message=message, level=level, source=source)
     if torrent:
         TorrentErrorLog.objects.create(torrent=torrent, error_log=log)
         if local_status:  # on "Status" screen
             torrent.local_status = local_status
-            torrent.local_status_level = level
             torrent.save()
-    if log.level == "ERROR":
+    if level.name == "ERROR":
         logger.error(f"Message: {log.message}, source: {log.source}")
-    if log.level == "WARNING":
+    if level.name == "WARNING":
         logger.warning(f"Message: {log.message}, source: {log.source}")
-    if log.level == "INFO":
+    if level.name == "INFO":
         logger.info(f"Message: {log.message}, source: {log.source}")
     return log
-
-
-class TorrentLog:
-    def __init__(self, message, level, source, torrent=None, local_status=None):
-        self.message = message
-        self.level = level
-        self.source = source
-        self.torrent = torrent
-        self.local_status = local_status
-
-    def log(self):
-        add_log(
-            self.message,
-            self.level,
-            self.source,
-            self.torrent,
-            local_status=self.local_status,
-        )
-
-
-def log_on_exit(func):
-    def wrapper(*args, **kwargs):
-        result = func(*args, **kwargs)
-        if isinstance(result, TorrentLog):
-            result.log()
-            return
-        return result
-
-    return wrapper
 
 
 def prepare_torrent_dir_name(torrent_name: str):
@@ -131,6 +101,7 @@ def update_double(torrent):
 
 def update_type(torrent: Torrent):
     logger = logging.getLogger("torbox")
+    INFO = Level.objects.get(name="INFO")
     no_type = TorrentType.objects.get(name="No Type")
     if torrent.torrent_type != no_type:
         logger.debug(f"Torrent {torrent} already had a type, skipping type update")
@@ -145,7 +116,7 @@ def update_type(torrent: Torrent):
         torrent.save()
         add_log(
             message=f"Torrent {torrent.name} with hash: {torrent.hash} was added with season/episode marker, updating as movie series type",
-            level="INFO",
+            level=INFO,
             source="torboxapi",
             torrent=torrent,
         )
@@ -169,10 +140,12 @@ def map_torbox_entry_to_torrent(entry, no_type):
         internal_id=entry.id_,
         magnet=entry.magnet,
         torrent_type=no_type,
+        cached=entry._kwargs["cached"],
+        private=entry._kwargs["private"],
     )
 
 
-def map_torbox_entry_to_torrent_history(entry, torrent):
+def map_torbox_entry_to_torrent_history(entry, torrent: Torrent):
     return TorrentHistory(
         torrent=torrent,
         download_speed=entry.download_speed,
@@ -188,18 +161,23 @@ def map_torbox_entry_to_torrent_history(entry, torrent):
     )
 
 
-def update_torrent(new_torrent):
+def update_torrent(new_torrent: Torrent):
+    from .statusmgr import StatusMgr
+
+    status_mgr = StatusMgr.get_instance()
     logger = logging.getLogger("torbox")
     torrent = get_previous_torrent(new_torrent)
+    INFO = Level.objects.get(name="INFO")
 
     if torrent:
+
         if torrent.deleted:
             torrent.redownload = True
             torrent.deleted = False
             logger.info(f"Redownloading torrent: {torrent}")
             add_log(
                 message=f"Marking torrent: {torrent} as redownload",
-                level="INFO",
+                level=INFO,
                 source="torboxapi",
                 torrent=torrent,
             )
@@ -211,6 +189,10 @@ def update_torrent(new_torrent):
             logger.info(
                 f"Updated internal id for torrent: {torrent}, old: {torrent.internal_id}, new: {new_torrent.internal_id}"
             )
+        if torrent.private != new_torrent.private:
+            torrent.private = new_torrent.private
+        if torrent.cached != new_torrent.cached:
+            torrent.cached = new_torrent.cached
         if torrent.name != new_torrent.name:
             torrent.name = new_torrent.name
         if torrent.size != new_torrent.size:
@@ -224,7 +206,7 @@ def update_torrent(new_torrent):
             )
             add_log(
                 message=f"New torrent: {torrent_to_log(new_torrent)} has type: {format_log_value(new_torrent.torrent_type.name)}, and old torrent: {torrent_to_log(torrent)} has No Type, updating type to the new one",
-                level="INFO",
+                level=INFO,
                 source="torboxapi",
                 torrent=torrent,
             )
@@ -238,17 +220,12 @@ def update_torrent(new_torrent):
         torrent.internal_id = new_torrent.internal_id
 
         torrent.save()
+        if torrent.local_status == status_mgr.client_init:
+            status_mgr.remote_client_added_torrent(torrent)
         logger.debug("torrent already existed")
     else:
-        new_torrent.save()
-        logger.debug(f"adding new torrent: {new_torrent}, {new_torrent.internal_id}")
-        add_log(
-            message=f"New torrent created: {torrent_to_log(new_torrent)} with hash: <i>'{new_torrent.hash}'</i>",
-            level="INFO",
-            source="torboxapi",
-            torrent=new_torrent,
-            local_status="TorBox: added",
-        )
+
+        status_mgr.remote_client_added_torrent(new_torrent)
         torrent = new_torrent
     update_double(torrent)
     update_type(torrent)
@@ -262,4 +239,17 @@ def mark_deleted_torrents(not_deleted, clients):
     logger.debug(f"Update delete: {ids_to_exclude}, {clients}")
     Torrent.objects.exclude(Q(pk__in=ids_to_exclude) | Q(client__in=clients)).update(
         deleted=True
+    )
+
+
+def get_active_torrents_with_current_history():
+    latest_details_subquery = (
+        TorrentHistory.objects.filter(torrent_id=OuterRef("pk"))
+        .order_by("-updated_at", "-pk")
+        .values("pk")[:1]
+    )
+    return (
+        Torrent.objects.filter(deleted=False)
+        .annotate(latest_history_id=Subquery(latest_details_subquery))
+        .order_by("client")
     )
