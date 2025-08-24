@@ -22,7 +22,9 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - name: Prepare
+        working-directory: ./yatbc
         run: |
+
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install coverage
@@ -36,9 +38,11 @@ jobs:
           printf 'export DJANGO_SECRET_KEY="%s"\nexport ARIA_SECRET_KEY="%s"\nexport TZ="%s"\n' "$DJANGO_SECRET" "$ARIA_SECRET" "$TZ" > $PERSISTENT_DIR/.env
 
       - name: Run Tests with Coverage
+        working-directory: ./yatbc
         run: |
           coverage run manage.py test "tor.tests"
 
       - name: Generate Coverage Report
+        working-directory: ./yatbc
         run: |
           coverage report
