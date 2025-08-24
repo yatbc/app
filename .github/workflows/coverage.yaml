@@ -1,0 +1,60 @@
+name: YATBC Coverage
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      max-parallel: 1
+      matrix:
+        python-version: ["3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Prepare
+        working-directory: ./yatbc
+        env:
+          RUN_DEBUG: "true"
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install coverage
+          PERSISTENT_DIR=data/persistent
+          mkdir -p $PERSISTENT_DIR
+
+          DJANGO_SECRET=$(python3 -c 'import secrets; print(secrets.token_urlsafe(50))')
+          ARIA_SECRET=$(python3 -c 'import secrets; print(secrets.token_urlsafe(10))')
+          TZ="Europe/Warsaw"
+          # fill settings with test data
+          printf 'export DJANGO_SECRET_KEY="%s"\nexport ARIA_SECRET_KEY="%s"\nexport TZ="%s"\n' "$DJANGO_SECRET" "$ARIA_SECRET" "$TZ" > $PERSISTENT_DIR/.env
+
+      - name: Run Tests with Coverage
+        working-directory: ./yatbc
+        env:
+          RUN_DEBUG: "true"
+        run: |
+          coverage run manage.py test "tor.tests"
+
+      - name: Generate Coverage Report
+        working-directory: ./yatbc
+        env:
+          RUN_DEBUG: "true"
+        run: |
+          coverage report
+          coverage html
+
+      - name: Upload HTML Report as Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-html-report
+          path: yatbc/htmlcov/
