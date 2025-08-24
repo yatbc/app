@@ -1,3 +1,4 @@
+[![YATBC Coverage](https://github.com/yatbc/app/actions/workflows/coverage.yaml/badge.svg)](https://github.com/yatbc/app/actions/workflows/coverage.yaml)
 # YATBC
 YATBC is an application for Self-Hosting enthusiasts with TorBox api key who like to store files on their local media.
 
