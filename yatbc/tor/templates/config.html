@@ -62,6 +62,10 @@
         <button class="nav-link" id="folders-tab" data-bs-toggle="tab" data-bs-target="#folders" type="button"
           role="tab" aria-controls="folders" aria-selected="false">Folders</button>
       </li>
+      <li class="nav-item" role="presentation">
+        <button class="nav-link" id="queue-tab" data-bs-toggle="tab" data-bs-target="#queue" type="button" role="tab"
+          aria-controls="queue" aria-selected="false">Queue</button>
+      </li>
     </ul>
     <div class="tab-content" id="configTabContent">
       <div class="tab-pane fade show active" id="torbox" role="tabpanel" aria-labelledby="torbox-tab">
@@ -140,7 +144,7 @@
         {% include 'includes/dragons.html' %}
         <div class="mb-3">
           <label for="use_transmission" class="form-label">
-            Use Transmission as backup client(YATC doesn't support TorBox's queues, so if you want to download more
+            Use Transmission as backup client(if you want to download more
             files then you have support in your TorBox plan, then you can use Transmission as a backup client):
           </label>
           <input id="use_transmission" type="checkbox" x-model="configuration.USE_TRANSMISSION" />
@@ -205,14 +209,14 @@
         {% if not show_on_start %}
         <div class="mb-3">
           <label for="add_referral" class="form-label">
-            Are you enjoying YATBC? Please consider adding referal to your TorBox account.
+            Are you enjoying YATBC? Please consider adding referral to your TorBox account.
           </label>
-          <button id="add_referral" class="btn btn-info ms-auto" @click="addReferral()">Add referal</button>
+          <button id="add_referral" class="btn btn-info ms-auto" @click="addReferral()">Add referral</button>
         </div>
         {% endif %}
         <div class="mb-3">
           <label for="test_ip" class="form-label">
-            Public IP from YATBC(if you are using VPN and whant to make sure that your IP is correct, using external
+            Public IP from YATBC(if you are using VPN and want to make sure that your IP is correct, using external
             service: http://ip-api.com/json/?fields=status,message,query,isp,org):
           </label>
           <input id="test_ip" x-model="test_ip" class="form-control" type="text" readonly />
@@ -252,6 +256,31 @@
         </template>
         <div class="mb-3">
           <button class="btn btn-secondary ms-auto" @click="validateFolders()">Validate folders</button>
+        </div>
+      </div>
+
+      <div class="tab-pane fade" id="queue" role="tabpanel" aria-labelledby="queue-tab">
+        <h2>Queue settings</h2>
+        <p><strong>Change folder path only if you are running outside of docker or you changed volume directories
+            on container in
+            docker-compose file.</strong></p>
+        <p>In root folder there will be subfolders with every supported torrent type with torrents from private or
+          public trackers.</p>
+        <p>Folder by default is monitored once every 10 minutes</p>
+        <p>Private torrents will never be touched by auto-clean, if you want to remove them from active download pls do
+          so from Status/[Delete].</p>
+        <p>When the Active Torrents Cleaning action is enabled and set to not manual, it will only clean if there are
+          torrents in the queue.</p>
+        <div class="mb-3">
+          <label for="queue_folder" class="form-label">
+            Root folder for YATBC to monitor for files to download
+          </label>
+          <input class="form-control" type="text" id="queue_folder" x-model="configuration.QUEUE_DIR"
+            placeholder="Queue root folder"
+            :class="{ 'is-invalid': queue_root_folder_valid === false, 'is-valid': queue_root_folder_valid === true }" />
+        </div>
+        <div class="mb-3">
+          <button class="btn btn-secondary ms-auto" @click="validateQueueFolders()">Validate queue folders</button>
         </div>
       </div>
 

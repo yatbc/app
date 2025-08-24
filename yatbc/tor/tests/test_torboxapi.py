@@ -68,10 +68,12 @@ class TorboxApiTests(TestCase):
         api.add_torrent.return_value = unittest.mock.Mock(
             hash="fakehash", torrent_id="12345"
         )
+        api.get_max_download_slots.return_value = 5
 
         add_torrent_by_magnet("magnet:?xt=fakehash&dn=test", self.test_type.id, api=api)
 
-        api.add_torrent.assert_called_once_with("magnet:?xt=fakehash&dn=test")
+        api.add_torrent.assert_called_once_with("magnet:?xt=fakehash&dn=test", None)
+        api.get_max_download_slots.assert_called_once_with()
         torrent = Torrent.objects.get(hash="fakehash")
         self.assertEqual(torrent.torrent_type, self.test_type)
 
@@ -100,6 +102,8 @@ class TorboxApiTests(TestCase):
                 "tracker": "test_tracker",
                 "total_uploaded": 1234,
                 "total_downloaded": 1233,
+                "cached": False,
+                "private": True,
             },
             files=None,
         )
@@ -116,6 +120,8 @@ class TorboxApiTests(TestCase):
         self.assertEqual(torrent.size, 123)
         self.assertEqual(torrent.torrent_type, self.no_type)
         self.assertEqual(torrent.internal_id, "123")
+        self.assertEqual(torrent.private, True)
+        self.assertEqual(torrent.cached, False)
         history = TorrentHistory.objects.get(torrent=torrent)
         self.assertEqual(history.download_speed, 12)
 

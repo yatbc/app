@@ -10,6 +10,11 @@ urlpatterns = [
     path("api/save_config", views.save_config, name="save_config"),
     path("api/get_logs", views.get_logs, name="get_logs"),
     path(
+        "api/get_logs/<int:current>/<int:limit>",
+        views.get_logs,
+        name="get_logs_paginated",
+    ),
+    path(
         "api/check_task_status/<task_id>",
         views.check_task_status_api,
         name="check_task_status_api",
@@ -95,16 +100,39 @@ urlpatterns = [
     path("api/add_torrent", views.add_torrent_api, name="add_torrent_api"),
     path("api/validate_torbox", views.validate_torbox, name="validate_torbox"),
     path("api/validate_aria", views.validate_aria, name="validate_aria"),
+    path("api/delete_queue", views.delete_queue, name="delete_queue"),
+    path(
+        "api/validate_queue_folders",
+        views.validate_queue_folders,
+        name="validate_queue_folders",
+    ),
     path(
         "api/validate_transmission",
         views.validate_transmission,
         name="validate_transmission",
     ),
+    path(
+        "api/update_queue_folders",
+        views.update_queue_folders,
+        name="update_queue_folders",
+    ),
+    path(
+        "api/update_torrent_type_in_queue/<int:queue_id>/<int:torrent_type_id>",
+        views.update_torrent_type_in_queue,
+        name="update_torrent_type_in_queue",
+    ),
     path("api/validate_folders", views.validate_folders, name="validate_folders"),
     path("api/test_ip", views.test_ip, name="test_ip"),
+    path("queue", views.queue, name="queue"),
+    path("api/get_active_queue", views.api_get_active_queue, name="get_active_queue"),
     path("history", views.history, name="history"),
     path("api/delete_logs", views.delete_logs, name="delete_logs"),
     path("api/delete_history", views.delete_history, name="delete_history"),
+    path(
+        "api/get_history/<int:current>/<int:limit>",
+        views.get_history,
+        name="get_history_pagination",
+    ),
     path("api/get_history", views.get_history, name="get_history"),
     path("api/add_referral", views.add_referral, name="add_referral"),
     path(

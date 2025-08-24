@@ -1,11 +1,20 @@
 from django.db import models
 
 
+class Level(models.Model):
+    name = models.CharField(max_length=20)
+
+
 class ErrorLog(models.Model):
     message = models.TextField()
     created_at = models.DateTimeField(auto_now_add=True)
-    level = models.CharField(max_length=50, default="ERROR")
+    level = models.ForeignKey(Level, on_delete=models.CASCADE)
     source = models.CharField(max_length=100, null=True, blank=True, default=None)
+
+
+class TorrentStatus(models.Model):
+    name = models.CharField(max_length=100)
+    level = models.ForeignKey(Level, on_delete=models.CASCADE)
 
 
 class TorrentType(models.Model):
@@ -20,7 +29,7 @@ class TorrentType(models.Model):
 class Torrent(models.Model):
     active = models.BooleanField(default=False)
     hash = models.CharField(max_length=255)
-    name = models.TextField(default="Empty Torrent")
+    name = models.TextField(default="Placeholder Torrent")
     size = models.IntegerField(default=0)
     created_at = models.DateTimeField()
     download_finished = models.BooleanField(default=False)
@@ -29,7 +38,9 @@ class Torrent(models.Model):
     total_uploaded = models.IntegerField(default=0)
     total_downloaded = models.IntegerField(default=0)
     client = models.CharField(max_length=50, default="TorBox")
-    internal_id = models.CharField(max_length=255, default=None, null=True, blank=True)
+    internal_id = models.CharField(
+        max_length=255, default=None, null=True, blank=True
+    )  # remote client id
     deleted = models.BooleanField(default=False)
     magnet = models.TextField(default=None, null=True, blank=True)
     doubled = models.BooleanField(default=False)
@@ -38,10 +49,20 @@ class Torrent(models.Model):
     local_download_progress = models.FloatField(default=0)
     redownload = models.BooleanField(default=False)
     torrent_type = models.ForeignKey(TorrentType, on_delete=models.CASCADE)
-    local_status = models.CharField(max_length=150, null=True, blank=True, default=None)
-    local_status_level = models.CharField(
-        max_length=20, null=True, blank=True, default=None
-    )
+    local_status = models.ForeignKey(TorrentStatus, on_delete=models.CASCADE)
+    finished_at = models.DateTimeField(default=None, null=True)
+    cached = models.BooleanField(default=False)  # was cached on remote client?
+    private = models.BooleanField(default=False)  # is from private tracker
+
+
+class TorrentQueue(models.Model):
+    added_at = models.DateTimeField(auto_now_add=True)
+    torrent_type = models.ForeignKey(TorrentType, on_delete=models.CASCADE)
+    magnet = models.TextField(default=None, null=True, blank=True)
+    torrent_file = models.BinaryField(default=None, null=True)
+    torrent_file_name = models.TextField(default=None, null=True, blank=True)
+    torrent_private = models.BooleanField(default=False)
+    priority = models.IntegerField(default=0)
 
 
 class TorrentErrorLog(models.Model):
@@ -70,6 +91,8 @@ class AriaDownloadStatus(models.Model):
     done = models.BooleanField(default=False)
     error = models.TextField(default="", blank=True)
     status = models.CharField(max_length=100)
+    created_at = models.DateTimeField(auto_now_add=True)
+    finished_at = models.DateTimeField(null=True, default=None)
 
 
 class TorrentFile(models.Model):

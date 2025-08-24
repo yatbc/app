@@ -1,1 +1,1 @@
-refferal_code=""
+referral_code = ""

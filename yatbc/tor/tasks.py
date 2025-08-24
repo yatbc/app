@@ -18,7 +18,7 @@ from datetime import timedelta
 from django.utils import timezone
 from .models import Torrent
 from django_tasks.backends.database.models import DBTaskResult, ResultStatus
-from .commondao import TORBOX_CLIENT, TRANSMISSION_CLIENT
+from .common import TORBOX_CLIENT, TRANSMISSION_CLIENT
 from django.db.models import Case, When, Value, IntegerField
 from constance import config
 
@@ -56,6 +56,23 @@ def torbox_status_task():
     logger.info("Starting tor api")
     update_torrent_list()
     logger.info("Tor api done")
+
+
+@task()
+def import_form_queue_folders_task():
+    from .queuemgr import import_from_queue_folders
+
+    logger = logging.getLogger("torbox")
+    logger.info("Starting import from queue folders")
+    import_from_queue_folders()
+    logger.info("Import from queue folders done")
+
+
+@task()
+def process_queue_task():
+    from .queuemgr import add_from_queue
+
+    add_from_queue()
 
 
 @task()
@@ -103,6 +120,7 @@ def change_torrent_task(action, torrent_id):
         change_torrent(torrent_id=torrent_id, action=action)
     else:
         logger.warning("Cant exec torrent change")
+    queue_process_queue()
     logger.info("Request done")
 
 
@@ -206,14 +224,39 @@ def queue_scheduler():
         return result
 
 
+def queue_import_from_queue_folders():
+    logger = logging.getLogger("torbox")
+    task_type = "tor.tasks.import_form_queue_folders_task"
+    result = get_task_queued_or_running(task_type)
+    if not result:
+        logger.info(f"Scheduling task: {task_type}")
+        return import_form_queue_folders_task.enqueue()
+    else:
+        logger.debug(f"Task {task_type} is already queued or running: {result}")
+        return result
+
+
+def queue_process_queue():
+    logger = logging.getLogger("torbox")
+    task_type = "tor.tasks.process_queue_task"
+    result = get_task_queued_or_running(task_type)
+    if not result:
+        logger.info(f"Scheduling task: {task_type}")
+        return process_queue_task.enqueue()
+    else:
+        logger.debug(f"Task {task_type} is already queued or running: {result}")
+        return result
+
+
 @task()
 def schedule_tasks():
-
     start_time = timezone.now()
     start_time += timedelta(minutes=10)
     logger = logging.getLogger("torbox")
     logger.info(f"Scheduling tasks every 10 min")
     check_status()
+    queue_import_from_queue_folders()
+    queue_process_queue()
     next_schedule = schedule_tasks.using(run_after=start_time)
     next_schedule.enqueue()
     logger.info("Scheduling done")

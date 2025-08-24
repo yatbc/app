@@ -8,11 +8,12 @@
   {% include 'includes/navbar.html' %}
 
   <h1>History:</h1>
-  <p><strong>Note:</strong> Includes last 50 entries</p>
   <div x-data="getData()">
     {% csrf_token %}
     {% include 'includes/alert.html' %}
+    {% include 'includes/confirm.html' %}
     {% include 'includes/wait.html' %}
+    {% include 'includes/pagination.html' %}
     <table class="table  table-striped" style="table-layout: fixed; width: 100%;">
       <thead>
         <tr>
@@ -22,7 +23,7 @@
           <th scope="col" style="width: 100px;">Total Uploaded</th>
           <th scope="col" style="width: 100px;">Download finished</th>
           <th scope="col" style="width: 100px;">Local download finished</th>
-          <th scope="col" style="width: 100px;">Type</th>
+          <th scope="col" style="width: 150px;">Finished at</th>
           <th scope="col" style="width: 200px;">Actions</th>
         </tr>
       </thead>
@@ -33,7 +34,14 @@
 
             <tr>
               <td x-text="entry.client"></td>
-              <td x-text="entry.name" class="text-break"></td>
+              <td class="text-break">
+                <div class="d-flex align-items-center gap-1">
+                  <div class="btn btn-primary btn-sm disabled btn-torrent-type" role="status" aria-disabled="true"
+                    x-text="torrent_types.find(item => item.id === entry.torrent_type).name">
+                  </div>
+                  <span x-text="entry.name"></span>
+                </div>
+              </td>
               <td x-text="entry.hash"></td>
               <td x-text="formatBytes(entry.total_uploaded)"></td>
               <td x-text="entry.download_finished"
@@ -41,7 +49,9 @@
               <td x-text="entry.local_download_finished"
                 :class="{'text-danger': !entry.local_download_finished, 'text-success': entry.local_download_finished } ">
               </td>
-              <td x-text="torrent_types.find(item => item.id === entry.torrent_type).name"></td>
+              <td x-text="entry.finished_at"></td>
+
+              </td>
               <td>
                 <a class="btn-info" :href="'/torrent_details/' + entry.id">Details</a>
                 <button type="button" class="btn btn-outline-danger btn-sm" @click="deleteHistory('single', entry.id)"

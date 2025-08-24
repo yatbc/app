@@ -18,14 +18,19 @@ function get_config() {
     transmission_port_valid: null,
     transmission_user_valid: null,
     transmission_password_valid: null,
+    queue_root_folder_valid: null,
     folders_valid: {},
     test_ip: "",
     test_isp: "",
     get_config() {
       this.isLoading = true;
-      fetch(`/get_config`)
-        .then((res) => res.json())
-        .then((data) => {
+      this.callApi(
+        "get_config",
+        (errorMessage = "Could not get configuration"),
+        (successMessage = null),
+        (method = "POST"),
+        (body = {}),
+        (onSuccess = (data) => {
           this.isLoading = false;
           for (const key in data.torrent_types) {
             this.folders_valid[data.torrent_types[key].id] = null;
@@ -39,11 +44,12 @@ function get_config() {
 
           console.log(this.configuration);
           console.log(this.torrent_types);
-        });
+        })
+      );
+
     },
     init() {
       this.initBootstrapHints();
-      this.setupSSE((update_action = () => { }));
       this.get_config();
     },
     buildConfig() {
@@ -57,7 +63,7 @@ function get_config() {
         value.TORBOX_API_KEY = this.torbox_api_key_value;
       }
       if (this.aria_password_value) {
-        value.ARIA2C_PASSWORD = this.aria_password_value;
+        value.ARIA2_PASSWORD = this.aria_password_value;
       }
       if (this.transmission_password_value) {
         value.TRANSMISSION_PASSWORD = this.transmission_password_value;
@@ -73,8 +79,28 @@ function get_config() {
         (successMessage = "Configuration saved"),
         (method = "POST"),
         (body = configData),
-        (onSucess = () => {
+        (onSuccess = () => {
           window.location.reload(true);
+        })
+      );
+    },
+    validateQueueFolders() {
+      this.isLoading = true;
+      const configData = this.buildConfig();
+      this.callApi(
+        "api/validate_queue_folders",
+        (errorMessage = "Could not validate Queue folders"),
+        (successMessage = "Queue folders validated successfully"),
+        (method = "POST"),
+        (body = configData),
+        (onSuccess = (json) => {
+          this.isLoading = false;
+          this.queue_root_folder_valid = true;
+        }),
+        (onError = (json) => {
+          this.isLoading = false;
+          this.showAlert(json.error, false);
+          this.queue_root_folder_valid = false;
         })
       );
     },
@@ -87,7 +113,7 @@ function get_config() {
         (successMessage = "TorBox validated successfully"),
         (method = "POST"),
         (body = configData),
-        (onSucess = (json) => {
+        (onSuccess = (json) => {
           this.isLoading = false;
           this.torbox_api_valid = true;
           this.torbox_host_valid = true;
@@ -111,8 +137,8 @@ function get_config() {
       this.isLoading = true;
       this.callApi(
         "api/add_referral",
-        (errorMessage = "Could not add referal"),
-        (successMessage = "Referal added successfully. Thank you!"),
+        (errorMessage = "Could not add referral"),
+        (successMessage = "Referral added successfully. Thank you!"),
         (method = "GET"),
         (body = null),
       );
@@ -126,7 +152,7 @@ function get_config() {
         (successMessage = "Aria validated successfully"),
         (method = "POST"),
         (body = configData),
-        (onSucess = (json) => {
+        (onSuccess = (json) => {
           console.log("Aria validation success:", json);
           this.isLoading = false;
           this.aria2_dir_valid = true;
@@ -164,7 +190,7 @@ function get_config() {
         (successMessage = "IP tested successfully"),
         (method = "GET"),
         null,
-        (onSucess = (json) => {
+        (onSuccess = (json) => {
           this.isLoading = false;
           this.test_ip = json.ip;
           this.test_isp = json.isp;
@@ -187,7 +213,7 @@ function get_config() {
         (successMessage = "Transmission validated successfully"),
         (method = "POST"),
         (body = configData),
-        (onSucess = (json) => {
+        (onSuccess = (json) => {
           console.log("Transmission validation success:", json);
           this.isLoading = false;
           this.transmission_dir_valid = true;
@@ -226,9 +252,9 @@ function get_config() {
         (successMessage = "Folders validated successfully"),
         (method = "POST"),
         (body = configData),
-        (onSucess = (json) => {
+        (onSuccess = (json) => {
           this.isLoading = false;
-          console.log("Folders validation succeded:", json);
+          console.log("Folders validation succeeded:", json);
 
           this.folders_valid = json.folders_valid;
         }),

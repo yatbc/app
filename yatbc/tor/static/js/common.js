@@ -77,6 +77,14 @@ function commonTooltips() {
     }
   }
 }
+function commonDialogs() {
+  return {
+    showModal: false,
+    dialogConfirmBody: "",
+    dialogConfirmHeader: "",
+    dialogConfirmCallback: () => { },
+  }
+}
 
 function commonCallApi() {
   return {
@@ -86,6 +94,7 @@ function commonCallApi() {
     wait_text: "Please wait...",
     ...commonAlert(),
     ...commonTooltips(),
+    ...commonDialogs(),
     checkTaskStatus(taskId, action) {
       this.isLoading = true;
       fetch(`/api/check_task_status/${taskId}`)
@@ -250,11 +259,48 @@ function commonCallApi() {
       this.sseSource.onerror = (error) => {
         this.wait_class = "text-danger";
         this.wait_text =
-          "Could not connect to server. Attepmting to reconnect... (Is server running?)";
+          "Could not connect to server. Attempting to reconnect... (Is server running?)";
         console.error("SSE error:", error);
         this.sseSource.close();
         setTimeout(() => this.setupSSE(), 5000); // Attempt to reconnect after a delay
       };
     },
   };
+}
+
+function commonPagination() {
+  return {
+    currentIndex: 0,
+    step: 20,
+    paginatedPageApi: "",
+    pageCurrentItems: 0,
+    paginationNewDataCallback: () => { },
+    paginationErrorCallback: () => { },
+    ...commonCallApi(),
+    loadPreviousPageCallback() {
+      this.currentIndex -= this.step;
+      api = this.paginatedPageApi + "/" + this.currentIndex + "/" + this.step
+      this.callApi(
+        api,
+        "",
+        "",
+        "GET",
+        null,
+        this.paginationNewDataCallback,
+        this.paginationNewDataCallback);
+    },
+    loadNextPageCallback() {
+      this.currentIndex += this.step;
+      api = this.paginatedPageApi + "/" + this.currentIndex + "/" + this.step
+      this.callApi(
+        api,
+        "",
+        "",
+        "GET",
+        null,
+        this.paginationNewDataCallback,
+        this.paginationNewDataCallback);
+    }
+
+  }
 }

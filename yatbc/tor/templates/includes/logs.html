@@ -14,7 +14,7 @@
             <template x-for="entry in log" :key="index">
 
                 <tr>
-                    <td x-text="entry.created_at"></td>
+                    <td x-text="entry.created_at" class="text-break"></td>
                     <td :class="{'text-danger': entry.level == 'ERROR', 'text-success': entry.level == 'INFO', 'text-warning': entry.level == 'WARNING' } "
                         x-text="entry.level"></td>
                     <td x-text="entry.source"></td>

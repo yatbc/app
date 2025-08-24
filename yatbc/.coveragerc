@@ -1,0 +1,8 @@
+# .coveragerc
+
+[run]
+omit =
+  */migrations/*.py
+  */tests/*.py
+  */urls.py
+  */manage.py

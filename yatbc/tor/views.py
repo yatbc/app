@@ -2,7 +2,7 @@ import logging
 import time
 from datetime import datetime, date, timedelta
 
-from django.db.models import OuterRef, Subquery
+from .common import shorten_torrent_name
 from django.forms.models import model_to_dict
 from django.http import HttpResponse
 from django.http import JsonResponse
@@ -15,8 +15,8 @@ from pathlib import Path
 from django.utils import timezone, dateformat
 import json
 import requests
-import random
-
+from .queuemgr import get_queue_folders, get_active_queue, get_queue_count
+from .commondao import get_active_torrents_with_current_history
 from .models import (
     Torrent,
     TorrentHistory,
@@ -25,6 +25,7 @@ from .models import (
     TorrentType,
     ErrorLog,
     TorrentFile,
+    TorrentQueue,
 )
 from .tasks import (
     queue_torbox_status,
@@ -40,6 +41,7 @@ from .tasks import (
     get_tasks,
     not_status_checking,
     ResultStatus,
+    queue_import_from_queue_folders,
 )
 
 from .torboxapi import validate_api, add_referral_api
@@ -75,10 +77,11 @@ def data_updates(request):
 
     def event_stream():
         logger = logging.getLogger("torbox")
+        # fixme: if tasks in queue are quick to finish, there will be no notification about finished task
         try:
             path = ""
             no_active_tasks_count = 0
-            worker_not_responding_treshold = 10
+            worker_not_responding_threshold = 10
             while True:
                 task_done, path = yield from wait_for_done(previous_path=path)
                 if task_done is None:
@@ -96,7 +99,7 @@ def data_updates(request):
 
                 if (
                     queued_tasks
-                    and no_active_tasks_count > worker_not_responding_treshold
+                    and no_active_tasks_count > worker_not_responding_threshold
                 ):
                     yield f"data: {json.dumps({'status': 'NoWorker', 'task': queued_tasks[0].task_path})}\n\n"
                     time.sleep(2)
@@ -157,6 +160,7 @@ def get_config(request):
     torrent_types = [model_to_dict(entry) for entry in folders]
     config_data = {
         "configuration": {
+            "QUEUE_DIR": config.QUEUE_DIR,
             "USE_TRANSMISSION": config.USE_TRANSMISSION,
             "TRANSMISSION_HOST": config.TRANSMISSION_HOST,
             "TRANSMISSION_PORT": config.TRANSMISSION_PORT,
@@ -204,8 +208,10 @@ def get_torrent_log(request, id):
     logger.info(f"Loading torrent logs for id: {id}")
     try:
         torrent = Torrent.objects.get(id=id)
-        error_logs = ErrorLog.objects.filter(torrenterrorlog__torrent=torrent).order_by(
-            "-created_at"
+        error_logs = (
+            ErrorLog.objects.filter(torrenterrorlog__torrent=torrent)
+            .prefetch_related("level")
+            .order_by("-created_at")
         )
 
         logs = [
@@ -213,7 +219,7 @@ def get_torrent_log(request, id):
                 "id": entry.id,
                 "message": entry.message,
                 "source": entry.source,
-                "level": entry.level,
+                "level": entry.level.name,
                 "created_at": entry.created_at.isoformat(),
                 "torrent_id": id,
             }
@@ -288,29 +294,44 @@ def add_referral(request):
         return JsonResponse({"error": status}, safe=False)
 
 
-def get_history(request):
+def get_history(request, current=0, limit=20):
+    if current < 0:
+        current = 0
+    if limit < 0:
+        limit = 1
     logger = logging.getLogger("torbox")
     logger.info("Loading history")
-    history = Torrent.objects.filter(deleted=True).order_by("-created_at", "-name")[:50]
-    return JsonResponse(
-        {"history": [model_to_dict(entry) for entry in history]}, safe=False
-    )
+    history = Torrent.objects.filter(deleted=True).order_by("-created_at", "-name")[
+        current : current + limit
+    ]
+    result = []
+    for entry in history:
+        entry = shorten_torrent_name(entry)
+        entry = model_to_dict(entry)
+        result.append(entry)
+
+    return JsonResponse({"history": result}, safe=False)
 
 
-def get_logs(request):
+def get_logs(request, current=0, limit=20):
     logger = logging.getLogger("torbox")
+    if current < 0:
+        current = 0
+    if limit < 0:
+        limit = 1
     logger.info("Loading logs")
     logs = (
-        ErrorLog.objects.filter(created_at__gte=timezone.now() - timedelta(days=7))
+        ErrorLog.objects.all()
         .prefetch_related("torrenterrorlog_set")
-        .order_by("-created_at")
+        .prefetch_related("level")
+        .order_by("-created_at")[current : current + limit]
     )
     logs = [
         {
             "id": entry.id,
             "message": entry.message,
             "source": entry.source,
-            "level": entry.level,
+            "level": entry.level.name,
             "created_at": entry.created_at.isoformat(),
             "torrent_id": (
                 entry.torrenterrorlog_set.first().torrent.id
@@ -322,6 +343,36 @@ def get_logs(request):
     ]
     result = {"log": logs}
     return JsonResponse(result, safe=False)
+
+
+def delete_queue(request):
+    logger = logging.getLogger("torbox")
+    if request.method == "POST":
+        body = json.loads(request.body)
+        logger.debug(f"Delete queue request body: {body}, type: {type(body)}")
+        if "command" in body:
+            if body["command"] == "single" and "queue_id" in body:
+                id = body["queue_id"]
+                TorrentQueue.objects.filter(id=id).delete()
+                logger.info(f"Queue entry for: {id} removed")
+                return JsonResponse(
+                    {"status": f"Queue for id: {id} deleted"}, safe=False
+                )
+            # if body["command"] == "older":
+            #     Torrent.objects.filter(
+            #         deleted=True, created_at__lte=timezone.now() - timedelta(days=30)
+            #     ).delete()
+            #     logger.info("History older than 14 days deleted")
+            #     return JsonResponse(
+            #         {"status": "History created older than 30 days deleted"}, safe=False
+            #     )
+            # elif body["command"] == "all":
+            #     Torrent.objects.filter(deleted=True).delete()
+            #     logger.info("All history deleted")
+            #     return JsonResponse({"status": "All history deleted"}, safe=False)
+        else:
+            return JsonResponse({"error": "Wrong request"}, status=400)
+    return JsonResponse({"error": "Invalid request"}, status=400)
 
 
 def delete_history(request):
@@ -403,6 +454,7 @@ def save_config(request):
             config.TRANSMISSION_DIR = result.get(
                 "TRANSMISSION_DIR", config.TRANSMISSION_DIR
             )
+            config.QUEUE_DIR = result.get("QUEUE_DIR", config.QUEUE_DIR)
             config.ARIA2_DIR = result.get("ARIA2_DIR", config.ARIA2_DIR)
             config.ARIA2_HOST = result.get("ARIA2_HOST", config.ARIA2_HOST)
             config.ARIA2_PORT = result.get("ARIA2_PORT", config.ARIA2_PORT)
@@ -484,7 +536,7 @@ def validate_aria(request):
                 logger.error(f"ARIA2_DIR: {ARIA2_DIR} does not exist")
                 return JsonResponse(
                     {
-                        "error": f"Aria validation failed: ARIA2_DIR: {ARIA2_DIR} dosn't exist or is not accessible",
+                        "error": f"Aria validation failed: ARIA2_DIR: {ARIA2_DIR} doesn't exist or is not accessible",
                         "reason": WRONG_ARIA2_DIR,
                     },
                     safe=False,
@@ -533,6 +585,32 @@ def test_ip(request):
         return JsonResponse({"error": f"Could not connect to ip-api.com"}, safe=False)
 
 
+def validate_queue_folders(request):
+    logger = logging.getLogger("torbox")
+    if request.method == "POST":
+        body = json.loads(request.body)
+        if "QUEUE_DIR" in body:
+            result = body
+            QUEUE_DIR = result.get("QUEUE_DIR", config.QUEUE_DIR)
+
+            if not Path(QUEUE_DIR).exists():
+                logger.error(f"QUEUE_DIR: {QUEUE_DIR} does not exist")
+                return JsonResponse(
+                    {
+                        "error": f"Queue validation failed: QUEUE_DIR: {QUEUE_DIR} doesn't exist or is not accessible",
+                        "reason": 1,
+                    },
+                    safe=False,
+                )
+            for path, _ in get_queue_folders():
+                if not path.exists():
+                    logger.error(f"What sorcery is this? {path} does not exist")
+
+            return JsonResponse({"status": True}, safe=False)
+        logger.warning(f"Wrong body in validate_queue_folders: {body}")
+    return JsonResponse({"error": "Invalid request"}, status=400)
+
+
 def validate_transmission(request):
     logger = logging.getLogger("torbox")
     if request.method == "POST":
@@ -556,7 +634,7 @@ def validate_transmission(request):
                 logger.error(f"TRANSMISSION_DIR: {TRANSMISSION_DIR} does not exist")
                 return JsonResponse(
                     {
-                        "error": f"Transmission validation failed: TRANSMISSION_DIR: {TRANSMISSION_DIR} dosn't exist or is not accessible",
+                        "error": f"Transmission validation failed: TRANSMISSION_DIR: {TRANSMISSION_DIR} doesn't exist or is not accessible",
                         "reason": 1,
                     },
                     safe=False,
@@ -653,42 +731,36 @@ def get_search_results(request, query, season=0, episode=0):
 
 
 def get_torrents():
-    latest_details_subquery = (
-        TorrentHistory.objects.filter(torrent_id=OuterRef("pk"))
-        .order_by("-updated_at", "-pk")
-        .values("pk")[:1]
-    )
-    torrent_with_latest_details = (
-        Torrent.objects.filter(deleted=False)
-        .annotate(latest_history_id=Subquery(latest_details_subquery))
-        .prefetch_related("torrenthistory_set")
-        .order_by("client")
-    )
+    torrent_with_latest_details = get_active_torrents_with_current_history()
     result = []
     summary = {"down": 0, "up": 0}
     for torrent_instance in torrent_with_latest_details:
         latest_history = None
         if torrent_instance.latest_history_id:
-            try:
-                latest_history = next(
-                    b
-                    for b in torrent_instance.torrenthistory_set.all()
-                    if b.pk == torrent_instance.latest_history_id
-                )
-            except StopIteration:
-                pass
-
-        if len(torrent_instance.name) > 100:
-            torrent_instance.name = torrent_instance.name[0:100] + "..."
+            latest_history = TorrentHistory.objects.get(
+                id=torrent_instance.latest_history_id
+            )
+        torrent_instance = shorten_torrent_name(torrent_instance)
         summary["down"] += latest_history.download_speed
         summary["up"] += latest_history.upload_speed
+        torrent = model_to_dict(torrent_instance)
+        torrent["local_status"] = model_to_dict(torrent_instance.local_status)
+        torrent["local_status"]["level"] = model_to_dict(
+            torrent_instance.local_status.level
+        )
         result.append(
             {
-                "torrent": model_to_dict(torrent_instance),
+                "torrent": torrent,
                 "history": model_to_dict(latest_history),
             }
         )
     return result, summary
+
+
+def update_queue_folders(request):
+    logger = logging.getLogger("torbox")
+    result = queue_import_from_queue_folders()
+    return JsonResponse({"request_id": result.id}, safe=False)
 
 
 def update_torrent_list(request):
@@ -713,7 +785,34 @@ def get_torrent_list(request):
         result, summary = get_torrents()
         torrent_types = [model_to_dict(entry) for entry in TorrentType.objects.all()]
         return JsonResponse(
-            {"torrents": result, "summary": summary, "torrent_types": torrent_types},
+            {
+                "torrents": result,
+                "summary": summary,
+                "torrent_types": torrent_types,
+                "queue_size": get_queue_count(),
+            },
+            safe=False,
+        )
+    return JsonResponse({"error": "Invalid request method"}, status=400)
+
+
+def api_get_active_queue(request):
+    logger = logging.getLogger("torbox")
+    if request.method == "GET":
+        result = get_active_queue()
+        queue = [
+            {
+                "id": entry.id,
+                "magnet": entry.magnet,
+                "torrent_file": entry.torrent_file_name,
+                "added_at": entry.added_at.isoformat(),
+                "priority": entry.priority,
+                "torrent_type_id": entry.torrent_type.id,
+            }
+            for entry in result
+        ]
+        return JsonResponse(
+            {"queue": queue},
             safe=False,
         )
     return JsonResponse({"error": "Invalid request method"}, status=400)
@@ -761,7 +860,17 @@ def update_torrent_type(request, torrent_id, torrent_type_id):
     logger = logging.getLogger("torbox")
     logger.info(f"Updating torrent type: {torrent_type_id} for torrent: {torrent_id}")
     torrent_type = TorrentType.objects.get(pk=torrent_type_id)
-    Torrent.objects.filter(pk=torrent_id).update(torrent_type=torrent_type)
+    Torrent.objects.filter(pk=torrent_id).update(
+        torrent_type=torrent_type
+    )  # filter has update
+    return JsonResponse({"response": True}, safe=False)
+
+
+def update_torrent_type_in_queue(request, queue_id, torrent_type_id):
+    logger = logging.getLogger("torbox")
+    logger.info(f"Updating torrent type: {torrent_type_id} for queue: {queue_id}")
+    torrent_type = TorrentType.objects.get(pk=torrent_type_id)
+    TorrentQueue.objects.filter(pk=queue_id).update(torrent_type=torrent_type)
     return JsonResponse({"response": True}, safe=False)
 
 
@@ -842,6 +951,15 @@ def add_torrent(request):
         "use_cdn": config.USE_CDN,
         "use_dark": config.USE_DARK,
         "use_transmission": config.USE_TRANSMISSION,
+    }
+    return HttpResponse(template.render(context, request))
+
+
+def queue(request):
+    template = loader.get_template("queue.html")
+    context = {
+        "use_cdn": config.USE_CDN,
+        "use_dark": config.USE_DARK,
     }
     return HttpResponse(template.render(context, request))
 

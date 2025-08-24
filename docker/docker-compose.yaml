@@ -17,37 +17,37 @@ volumes:
     driver_opts:
       type: none
       o: bind
-      device: /mnt/movies/ # <--- Specify your movies host path here
+      device: /mnt/target/ # <--- Specify your movies host path here
   movie_series_data:
     driver: local
     driver_opts:
       type: none
       o: bind
-      device: /mnt/series/ # <--- Specify your movie series host path here
+      device: /mnt/target/ # <--- Specify your movie series host path here
   books_data:
     driver: local
     driver_opts:
       type: none
       o: bind
-      device: /mnt/books/ # <--- Specify your books host path here
+      device: /mnt/target/ # <--- Specify your books host path here
   audio_data:
     driver: local
     driver_opts:
       type: none
       o: bind
-      device: /mnt/audio/ # <--- Specify your audio host path here
+      device: /mnt/target/ # <--- Specify your audio host path here
   other_data:
     driver: local
     driver_opts:
       type: none
       o: bind
-      device: /mnt/other/ # <--- Specify your other host path here
+      device: /mnt/target/ # <--- Specify your other host path here
   home_data:
     driver: local
     driver_opts:
       type: none
       o: bind
-      device: /mnt/home/ # <--- Specify your home videos host path here
+      device: /mnt/target/ # <--- Specify your home videos host path here
 services:  
   yatbc-prepare:    
     image: yatbc/yatbc:gui-latest

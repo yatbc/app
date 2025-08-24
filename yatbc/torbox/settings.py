@@ -29,6 +29,7 @@ if DEBUG:
 else:
     PERSISTENT_DIR = Path("/data") / "persistent"
 load_dotenv(PERSISTENT_DIR / ".env")
+
 SECRET_KEY = os.getenv("DJANGO_SECRET_KEY")
 
 STATIC_ROOT = PERSISTENT_DIR / "http/production_files/"
@@ -118,11 +119,28 @@ CONSTANCE_CONFIG = {
     "USE_CDN": (True, "Use CDN for js files like bootstrap, alpine js, etc."),
     "SHOW_CONFIG_ON_START": (True, "Show config on start"),
     "USE_DARK": (True, "Use dark theme"),
-    "TRANSMISSION_DIR": (
+    "TRANSMISSION_DIR": (  # obsolete - transmission files will be handled by sftp
         "/data/tor",
         "Where does Transmission store downloaded files?",
     ),
     "ARIA2_DIR": ("/data/aria2", "Where Aria2 should store downloaded files"),
+    "QUEUE_DIR": (
+        "/data/persistent/queue",
+        "Where is root folder for queue monitoring?",
+    ),
+    "MAX_DOWNLOAD_TORBOX_SLOTS": (0, "Max download torbox slots"),
+    "NEXT_MAX_DOWNLOAD_TORBOX_SLOTS_CHECK": (
+        None,
+        "When YATBC should checked for max download torbox slots next time?",
+    ),
+    "CLEAN_ACTIVE_DOWNLOADS_POLICY": (
+        0,
+        "How YATBC should clean downloads if queue is not empty",
+    ),
+    "SUPPRESS_NO_FREE_SLOTS_IN_QUEUE_MSG": (
+        None,
+        "Till when should suppress warning about no free slots?",
+    ),
 }
 
 ROOT_URLCONF = "torbox.urls"
