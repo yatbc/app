@@ -2,7 +2,7 @@
     <thead>
         <tr>
             <th scope="col">Name</th>
-            <th scope="col" style="width: 100px;">Mime type</th>
+            <th scope="col" style="width: 200px;">Mime type</th>
             <th scope="col" style="width: 100px;">Local download status</th>
             <th scope="col" style="width: 120px;">Local download finished at</th>
             <th scope="col" style="width: 100px;">Action status</th>
@@ -16,7 +16,7 @@
 
                 <tr :class="{'text-danger': entry.aria.error, '': !entry.aria.error } ">
                     <td x-text="entry.name" class="text-break"></td>
-                    <td x-text="entry.mime_type"></td>
+                    <td x-text="entry.mime_type" class="text-break"></td>
                     <td x-text="entry.aria.status"></td>
                     <td x-text="entry.aria.finished_at ? entry.aria.finished_at : 'Not done'" class="text-break"></td>
                     <td x-text="entry.action_on_finish_done ? 'Done' : 'Waiting'"></td>

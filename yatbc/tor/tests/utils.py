@@ -2,7 +2,7 @@ from ..models import (
     Torrent,
     TorrentFile,
     TorrentType,
-    AriaDownloadStatus,
+    TorrentHistory,
     TorrentStatus,
 )
 import shutil
@@ -10,8 +10,10 @@ from pathlib import Path
 from ..torboxapi import TORBOX_CLIENT
 
 
-def create_work_dir(name="./test/"):
-    work_dir = Path("./test/")
+def create_work_dir(name=None):
+    if not name:
+        name = "./test/"
+    work_dir = Path(name)
     shutil.rmtree(work_dir, ignore_errors=True)
     work_dir.mkdir()
     return work_dir
@@ -26,17 +28,23 @@ def create_file(file_name, work_dir=None):
     return file_path, work_dir
 
 
-def create_torrent_file(torrent, aria=None, internal_id="asd1"):
+def create_torrent_file(
+    torrent, aria=None, internal_id="asd1", name="Test", short_name="Short test name"
+):
     return TorrentFile.objects.create(
         torrent=torrent,
         aria=aria,
-        name="Test",
-        short_name="Short test name",
+        name=name,
+        short_name=short_name,
         size=123,
         hash="hash",
         mime_type="Mime",
         internal_id=internal_id,
     )
+
+
+def create_history(torrent: Torrent):
+    return TorrentHistory.objects.create(torrent=torrent, updated_at="2000-01-01 00:11")
 
 
 def create_torrent(

@@ -37,7 +37,7 @@
       <li>Manages history, helps to determine if you already have "this" file.</li>
       <li>Tries to inform the user about actions taken via logs related to files.</li>
       <!--<li>Use Transmission as a backup client.</li>-->
-      <!--<li>Basic functionality similar to common *arr stacks</li>-->
+      <li>Basic functionality similar to common *arr stacks</li>
     </ul>
     {% endif %}
 
@@ -65,6 +65,14 @@
       <li class="nav-item" role="presentation">
         <button class="nav-link" id="queue-tab" data-bs-toggle="tab" data-bs-target="#queue" type="button" role="tab"
           aria-controls="queue" aria-selected="false">Queue</button>
+      </li>
+      <li class="nav-item" role="presentation">
+        <button class="nav-link" id="arr-tab" data-bs-toggle="tab" data-bs-target="#arr" type="button" role="tab"
+          aria-controls="Arr" aria-selected="false">Arr</button>
+      </li>
+      <li class="nav-item" role="presentation">
+        <button class="nav-link" id="stash-tab" data-bs-toggle="tab" data-bs-target="#stash" type="button" role="tab"
+          aria-controls="Stash" aria-selected="false">Stash</button>
       </li>
     </ul>
     <div class="tab-content" id="configTabContent">
@@ -269,7 +277,7 @@
         <p>Folder by default is monitored once every 10 minutes</p>
         <p>Private torrents will never be touched by auto-clean, if you want to remove them from active download pls do
           so from Status/[Delete].</p>
-        <p>When the Active Torrents Cleaning action is enabled and set to not manual, it will only clean if there are
+        <p>When the Download Slots Cleaning action is enabled and set to Auto, it will only clean if there are
           torrents in the queue.</p>
         <div class="mb-3">
           <label for="queue_folder" class="form-label">
@@ -280,10 +288,68 @@
             :class="{ 'is-invalid': queue_root_folder_valid === false, 'is-valid': queue_root_folder_valid === true }" />
         </div>
         <div class="mb-3">
+          <label class="form-check-label" for="radio-clean-manual">Manual download slots cleaning:</label>
+          <input class="form-check-input" type="radio" name="radio-clean" id="radio-clean-manual" value="0"
+            x-model="configuration.CLEAN_ACTIVE_DOWNLOADS_POLICY" />
+          <label class="form-check-label" for="radio-clean-auto">Auto download slots cleaning:</label>
+          <input class="form-check-input" type="radio" name="radio-clean" id="radio-clean-auto" value="1"
+            x-model="configuration.CLEAN_ACTIVE_DOWNLOADS_POLICY" />
+        </div>
+        <div class="mb-3">
           <button class="btn btn-secondary ms-auto" @click="validateQueueFolders()">Validate queue folders</button>
         </div>
       </div>
 
+      <div class="tab-pane fade" id="arr" role="tabpanel" aria-labelledby="arr-tab">
+        <h2>Arr settings</h2>
+        <p><strong>Note:</strong> At the moment only the movie type files will be organized. The rest will land in
+          default folder for given torrent type.</p>
+        <div class="mb-3">
+          <label for="organize_movies_eries" class="form-label">
+            Organize new downloads with movie series type to match Jellyfin's folder structure:
+          </label>
+          <input id="organize_movies_eries" type="checkbox" x-model="configuration.ORGANIZE_MOVIE_SERIES" />
+        </div>
+        <div class="mb-3">
+          <label for="organize_movies" class="form-label">
+            Organize new downloads with movies type to match Jellyfin's folder structure:
+          </label>
+          <input id="organize_movies" type="checkbox" x-model="configuration.ORGANIZE_MOVIES" />
+        </div>
+      </div>
+      <div class="tab-pane fade" id="stash" role="tabpanel" aria-labelledby="stash-tab">
+        <h2>Stash settings</h2>
+        <div class="mb-3">
+          <label for="use_stash" class="form-label">
+            Rescan Stash when task for home video runs(just the the folder from action, not whole Stash):
+          </label>
+          <input id="use_stash" type="checkbox" x-model="configuration.RESCAN_STASH_ON_HOME_VIDEO" />
+        </div>
+        <div class="mb-3">
+          <label for="stash_host" class="form-label">
+            Stash host (required if using Stash):
+          </label>
+          <input class="form-control" id="stash_host" type="text" x-model="configuration.STASH_HOST"
+            :class="{ 'is-invalid': stash_host_valid === false, 'is-valid': stash_host_valid === true }" />
+        </div>
+        <div class="mb-3">
+          <label for="stash_dir" class="form-label">
+            Internal stash folder. If Stash is working in docker, then this is the folders name, e.g. /data, otherwise
+            full path(check Stash/Settings/Library/Path):
+          </label>
+          <input class="form-control" id="stash_dir" type="text" x-model="configuration.STASH_ROOT_DIR" />
+        </div>
+        <div class="mb-3">
+          <label for="stash_port" class="form-label">
+            Stash port (required if using Stash):
+          </label>
+          <input class="form-control" id="stash_port" type="text" x-model="configuration.STASH_PORT"
+            :class="{ 'is-invalid': stash_port_valid === false, 'is-valid': stash_port_valid === true }" />
+        </div>
+        <div class="mb-3">
+          <button class="btn btn-secondary ms-auto" @click="validateStash()">Validate Stash</button>
+        </div>
+      </div>
 
     </div>
 

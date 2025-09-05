@@ -21,6 +21,11 @@ _Disclaimer: This application was developed for educational purposes only and is
 4. When Aria2c will finish downloading, YATBC will copy downloaded file to configured target folder based on media type
 5. YATBC will inform you about every important action via easy(hopefully) accessible logs related to files
 
+## Integrations
+All Integrations can be enabled/disabled in configuration.
+1. Media libraries integration (like Jellyfin). Integration works for torrents marked as Movie Series or Movie type. When file will finish downloading to local storage, the app will adjust it name to {title} {SNumber}{ENumber}. If the file was added via TorBox's search api, it will also contain the id in the name.  
+2. Stash integration. Integration works for torrents marked as Home Video. When file will finish downloading to local storage, the app will call Stash's graphql api to scan new folder.
+
 ## Some screen shots:
 <div style="display: flex; flex-wrap: wrap;">
   <img src="docs/images/yatbc-start.jpg" width="1200" style="padding: 5px;">
