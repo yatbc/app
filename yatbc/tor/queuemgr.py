@@ -12,6 +12,8 @@ from .commondao import (
 )
 from .statusmgr import StatusMgr
 
+MANUAL_POLICY = 0
+
 
 def get_active_queue(limit=None):
     queue = TorrentQueue.objects.all().order_by("-priority", "-added_at")
@@ -115,38 +117,32 @@ def clean_active_downloads():
     status_mgr = StatusMgr.get_instance()
     logger = logging.getLogger("torbox")
 
-    MANUAL = 0
-
-    BY_RATIO_ON_HOUR = 1
-    if config.CLEAN_ACTIVE_DOWNLOADS_POLICY == MANUAL:
+    BY_RATIO_ONE_HOUR = 1
+    if int(config.CLEAN_ACTIVE_DOWNLOADS_POLICY) == MANUAL_POLICY:
         logger.info("Manual cleaning policy, skipping cleaning active downloads")
         return
 
-    active_downloads = get_active_torrents_with_current_history().exclude(
-        finished_at__is_null=True
+    active_downloads = get_active_torrents_with_current_history().exclude(  # we can only remove torrents that are done(have finish action done)
+        finished_at__isnull=True
     )
     cleaned = 0
     for torrent in active_downloads:
         history = None
         if torrent.latest_history_id:
             history = TorrentHistory.objects.get(id=torrent.latest_history_id)
-        previous = (
-            TorrentHistory.objects.filter(torrent_id=torrent.id)
-            .order_by("-updated_at", "-pk")
-            .values("pk")[1:2]
-            .first()
-        )
         if torrent.private:
             logger.debug(f"skipping torrent: {torrent}, it is marked as private")
             continue
-        if (
-            not history or not previous or torrent.cached
-        ):  # probably from cache, so it could be safely removed
+        if torrent.cached:
             delete_torrent_with_log(torrent)
+            logger.debug(f"Active cleaning removing cached torrent: {torrent.id}")
             cleaned += 1
             continue
-        time_delta = previous.updated_at - history.updated_at
+        time_delta = timezone.now() - torrent.finished_at
         if time_delta.total_seconds() > 60 * 60:  # hour
+            logger.debug(
+                f"Active cleaning removing torrent older then one hour: {torrent.id}, age done: {time_delta.total_seconds()}s"
+            )
             delete_torrent_with_log(torrent)
             cleaned += 1
     add_log(
@@ -154,6 +150,7 @@ def clean_active_downloads():
         level=status_mgr.INFO,
         source="queuemgr",
     )
+    return cleaned
 
 
 def add_from_queue():

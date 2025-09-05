@@ -3,7 +3,6 @@ from . import views
 
 urlpatterns = [
     path("", views.index, name="index"),
-    path("start_api", views.start_api, name="start_api"),
     path("config", views.configuration, name="config"),
     path("log", views.error_log, name="error_log"),
     path("get_config", views.get_config, name="get_config"),
@@ -105,6 +104,11 @@ urlpatterns = [
         "api/validate_queue_folders",
         views.validate_queue_folders,
         name="validate_queue_folders",
+    ),
+    path(
+        "api/validate_stash",
+        views.validate_stash,
+        name="validate_stash",
     ),
     path(
         "api/validate_transmission",

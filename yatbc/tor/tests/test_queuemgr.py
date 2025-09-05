@@ -6,14 +6,17 @@ from ..queuemgr import (
     add_to_queue_by_torrent_file,
     get_queue_folders,
     import_from_queue_folders,
+    clean_active_downloads,
+    MANUAL_POLICY,
 )
 from constance import config
+from unittest.mock import patch, Mock
 
 from pathlib import Path
 from django.utils import timezone
 import logging
 from .temp_settings import console_logging_config
-from .utils import create_file, create_work_dir
+from .utils import create_file, create_work_dir, create_torrent, create_history
 import shutil
 
 
@@ -21,7 +24,7 @@ import shutil
 class QueueMgrTests(TestCase):
     def setUp(self):
         logging.config.dictConfig(console_logging_config)
-        self.no_type = TorrentType.objects.get(name="No Type")
+        self.no_type = TorrentType.objects.get_no_type()
 
     def test_ok_add_to_queue_by_magnet(self):
         TorrentQueue.objects.all().delete()
@@ -69,3 +72,37 @@ class QueueMgrTests(TestCase):
         for queue in result:
             self.assertTrue(queue.torrent_file_name in files)
         shutil.rmtree(work_dir)
+
+    def _create_finished(self, private=False, cached=True, finished_at=timezone.now()):
+        torrent = create_torrent(self.no_type)
+        torrent.local_download_finished = True
+        torrent.local_download_progress = 1
+        torrent.finished_at = finished_at
+        torrent.cached = cached
+        torrent.private = private
+        torrent.save()
+        history = create_history(torrent)
+        return torrent
+
+    @patch(target="tor.queuemgr.delete_torrent_with_log")
+    def test_auto_cleaning_policy_will_remove_all(self, delete_log: Mock):
+        config.CLEAN_ACTIVE_DOWNLOADS_POLICY = MANUAL_POLICY + 1
+        expected = 5
+        for i in range(0, expected):
+            self._create_finished()
+
+        result = clean_active_downloads()
+        self.assertEqual(expected, result)
+        self.assertEqual(delete_log.call_count, expected)
+
+    @patch(target="tor.queuemgr.delete_torrent_with_log")
+    def test_auto_cleaning_policy_will_remove_inactive(self, delete_log: Mock):
+        config.CLEAN_ACTIVE_DOWNLOADS_POLICY = MANUAL_POLICY + 1
+        expected = 1
+        self._create_finished(private=True)
+        self._create_finished(finished_at=timezone.now(), cached=False)
+        expected_delete = self._create_finished(finished_at="2000-01-01", cached=False)
+
+        result = clean_active_downloads()
+        self.assertEqual(expected, result)
+        delete_log.assert_called_once_with(expected_delete)

@@ -22,6 +22,9 @@ function get_config() {
     folders_valid: {},
     test_ip: "",
     test_isp: "",
+    stash_host_valid: null,
+    stash_dir_valid: null,
+    stash_port_valid: null,
     get_config() {
       this.isLoading = true;
       this.callApi(
@@ -129,6 +132,30 @@ function get_config() {
             this.torbox_api_valid = false;
             this.torbox_host_valid = false;
           }
+        })
+      );
+    },
+    validateStash() {
+      this.isLoading = true;
+      const configData = this.buildConfig();
+      this.callApi(
+        "api/validate_stash",
+        (errorMessage = "Could not validate Stash"),
+        (successMessage = "Stash validated successfully"),
+        (method = "POST"),
+        (body = configData),
+        (onSuccess = (json) => {
+          this.isLoading = false;
+          this.stash_host_valid = true;
+          this.stash_port_valid = true;
+        }),
+        (onError = (json) => {
+          this.isLoading = false;
+          this.showAlert(json.error, false);
+
+          this.stash_host_valid = false;
+          this.stash_port_valid = false;
+
         })
       );
     },

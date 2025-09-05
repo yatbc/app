@@ -174,8 +174,8 @@ class TorBoxApi:
                 # offset="integer",
                 # limit="integer"
             )
+
             if result.error:
-                self.logger.debug("Failed to access tor api")
                 add_log(
                     message=f"Failed to access tor api: {clean_html(result.error)}",
                     level=self.status_mgr.ERROR,
@@ -184,6 +184,9 @@ class TorBoxApi:
                 return None
             if result.success:
                 return result.data
+            self.logger.error(
+                f"Wrong api structure, if there is no error, there should be a success in get_torrent_list"
+            )
         except Exception as e:
             add_log(
                 message=f"Could not get torrents: {clean_html(e)}",
@@ -262,7 +265,7 @@ def search_torrent(query, season, episode, api=None):
                     torrent_search_result.resolution = parsed["resolution"]
                 if "codec" in parsed:
                     torrent_search_result.codec = parsed["codec"]
-                if "season" in parsed:
+                if "season" in parsed and not isinstance(parsed["season"], list):
                     try:
                         torrent_search_result.season = int(parsed["season"])
                     except ValueError:
@@ -373,8 +376,8 @@ def add_torrent(query_search_id):
         return
 
     logger.debug(f"Updating search result: {result} with matching torrent {torrent}")
-    torrent.torrent = torrent
-    torrent.save()
+    result.torrent = torrent
+    result.save()
     add_log(
         message=f"Torrent {torrent_to_log(torrent)} with hash: <i>'{torrent.hash}'</i> was added from search result: <i>'{result.query}'</i>",
         level=StatusMgr.get_instance().INFO,
@@ -572,9 +575,9 @@ def update_torrent_list(api=None):
 
     logger = logging.getLogger("torbox")
     data = api.get_torrent_list()
-    if not data:
+    if data is None:
         return None
-
+    logger.debug(f"Updating entries: {len(data)} in torboxapi")
     not_deleted = []
     for entry in data:
         new_torrent = map_torbox_entry_to_torrent(entry, no_type=no_type)

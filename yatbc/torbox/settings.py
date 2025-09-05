@@ -144,6 +144,22 @@ CONSTANCE_CONFIG = {
         None,
         "Till when should suppress warning about no free slots?",
     ),
+    "ORGANIZE_MOVIE_SERIES": (
+        True,
+        "Should the app organize newly downloaded movie series?",
+    ),
+    "ORGANIZE_MOVIES": (
+        True,
+        "Should the app organize newly downloaded movies?",
+    ),
+    "STASH_HOST": ("", "Stash host"),
+    "STASH_PORT": ("9999", "Stash port"),
+    "STASH_SECRET": ("", "Stash api key"),
+    "STASH_ROOT_DIR": ("/data", "Where Stash stores its files"),
+    "RESCAN_STASH_ON_HOME_VIDEO": (
+        False,
+        "Rescan Stash when task for home video runs ",
+    ),
 }
 
 ROOT_URLCONF = "torbox.urls"

@@ -47,6 +47,7 @@ from .tasks import (
 from .torboxapi import validate_api, add_referral_api
 from .ariaapi import validate_aria_api
 from .transmissionapi import validate_transmission_api
+from .stashapi import validate_stash_api
 
 
 def data_updates(request):
@@ -124,25 +125,7 @@ def data_updates(request):
     return StreamingHttpResponse(event_stream(), content_type="text/event-stream")
 
 
-def json_serial(obj):
-    """JSON serializer for objects not serializable by default json code"""
-
-    if isinstance(obj, (datetime, date)):
-        return obj.isoformat()
-    if isinstance(obj, timezone):
-        return dateformat.format(obj, "Y-m-d H:i:s")
-    raise TypeError("Type %s not serializable" % type(obj))
-
-
 # API Endpoints
-
-
-def start_api(request):
-    logger = logging.getLogger("torbox")
-    logger.info("Start scheduler")
-    result = queue_scheduler()
-    logger.info("Task enqueued")
-    return JsonResponse({"request_id": result.id}, safe=False)
 
 
 def search_torrent_api(request, query, season=0, episode=0):
@@ -176,6 +159,13 @@ def get_config(request):
             "TORBOX_SEARCH_API": config.TORBOX_SEARCH_API,
             "TORBOX_API_KEY_SET": len(config.TORBOX_API_KEY) > 0,
             "USE_DARK": config.USE_DARK,
+            "CLEAN_ACTIVE_DOWNLOADS_POLICY": config.CLEAN_ACTIVE_DOWNLOADS_POLICY,
+            "ORGANIZE_MOVIE_SERIES": config.ORGANIZE_MOVIE_SERIES,
+            "ORGANIZE_MOVIES": config.ORGANIZE_MOVIES,
+            "RESCAN_STASH_ON_HOME_VIDEO": config.RESCAN_STASH_ON_HOME_VIDEO,
+            "STASH_HOST": config.STASH_HOST,
+            "STASH_PORT": config.STASH_PORT,
+            "STASH_ROOT_DIR": config.STASH_ROOT_DIR,
         },
         "torrent_types": torrent_types,
     }
@@ -263,6 +253,9 @@ def get_torrent_details(request, id):
             .order_by("-updated_at")
             .first()
         )
+        if not torrent_history:
+            logger.error(f"Torrent: {torrent.id} has no history!")
+            return JsonResponse({"error": "Torrent has no history"}, safe=False)
         files = TorrentFile.objects.filter(torrent=torrent).prefetch_related("aria")
         files_with_aria = []
         for file in files:
@@ -358,18 +351,6 @@ def delete_queue(request):
                 return JsonResponse(
                     {"status": f"Queue for id: {id} deleted"}, safe=False
                 )
-            # if body["command"] == "older":
-            #     Torrent.objects.filter(
-            #         deleted=True, created_at__lte=timezone.now() - timedelta(days=30)
-            #     ).delete()
-            #     logger.info("History older than 14 days deleted")
-            #     return JsonResponse(
-            #         {"status": "History created older than 30 days deleted"}, safe=False
-            #     )
-            # elif body["command"] == "all":
-            #     Torrent.objects.filter(deleted=True).delete()
-            #     logger.info("All history deleted")
-            #     return JsonResponse({"status": "All history deleted"}, safe=False)
         else:
             return JsonResponse({"error": "Wrong request"}, status=400)
     return JsonResponse({"error": "Invalid request"}, status=400)
@@ -454,6 +435,9 @@ def save_config(request):
             config.TRANSMISSION_DIR = result.get(
                 "TRANSMISSION_DIR", config.TRANSMISSION_DIR
             )
+            config.CLEAN_ACTIVE_DOWNLOADS_POLICY = result.get(
+                "CLEAN_ACTIVE_DOWNLOADS_POLICY", config.CLEAN_ACTIVE_DOWNLOADS_POLICY
+            )
             config.QUEUE_DIR = result.get("QUEUE_DIR", config.QUEUE_DIR)
             config.ARIA2_DIR = result.get("ARIA2_DIR", config.ARIA2_DIR)
             config.ARIA2_HOST = result.get("ARIA2_HOST", config.ARIA2_HOST)
@@ -466,6 +450,18 @@ def save_config(request):
             )
             config.USE_DARK = result.get("USE_DARK", config.USE_DARK)
             config.SHOW_CONFIG_ON_START = False
+            config.ORGANIZE_MOVIE_SERIES = result.get(
+                "ORGANIZE_MOVIE_SERIES", config.ORGANIZE_MOVIE_SERIES
+            )
+            config.ORGANIZE_MOVIES = result.get(
+                "ORGANIZE_MOVIES", config.ORGANIZE_MOVIES
+            )
+            config.STASH_HOST = result.get("STASH_HOST", config.STASH_HOST)
+            config.STASH_PORT = result.get("STASH_PORT", config.STASH_PORT)
+            config.STASH_ROOT_DIR = result.get("STASH_ROOT_DIR", config.STASH_ROOT_DIR)
+            config.RESCAN_STASH_ON_HOME_VIDEO = result.get(
+                "RESCAN_STASH_ON_HOME_VIDEO", config.RESCAN_STASH_ON_HOME_VIDEO
+            )
             if result.get("TORBOX_API_KEY", None):
                 config.TORBOX_API_KEY = result.get("TORBOX_API_KEY", None)
                 result["TORBOX_API_KEY"] = "UPDATED"
@@ -497,6 +493,29 @@ def save_config(request):
             logger.info(f"Configuration saved: {result}")
             return JsonResponse({"status": "Ok"}, safe=False)
         logger.warning(f"Wrong body in save_config: {body}")
+    return JsonResponse({"error": "Invalid request"}, status=400)
+
+
+def validate_stash(request):
+    logger = logging.getLogger("torbox")
+    if request.method == "POST":
+        body = json.loads(request.body)
+        if "STASH_HOST" in body:
+            result = body
+            STASH_HOST = result.get("STASH_HOST", config.STASH_HOST)
+            STASH_PORT = result.get("STASH_PORT", config.STASH_PORT)
+            STASH_ROOT_DIR = result.get("STASH_ROOT_DIR", config.STASH_ROOT_DIR)
+            ok, response = validate_stash_api(
+                STASH_HOST, STASH_PORT, "", STASH_ROOT_DIR
+            )
+
+            logger.info(f"Stash validation: {ok}, {response}")
+            if ok:
+                return JsonResponse({"status": ok}, safe=False)
+            else:
+                logger.error(f"Stash validation failed: {response}")
+                return JsonResponse({"error": response}, safe=False)
+        logger.warning(f"Wrong body in validate_stash: {body}")
     return JsonResponse({"error": "Invalid request"}, status=400)
 
 

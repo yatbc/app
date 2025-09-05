@@ -1,4 +1,5 @@
 from django.db import models
+from django.db.models import Q
 
 
 class Level(models.Model):
@@ -17,6 +18,26 @@ class TorrentStatus(models.Model):
     level = models.ForeignKey(Level, on_delete=models.CASCADE)
 
 
+class TorrentTypeManager(models.Manager):
+    def get_no_type(self):
+        return self.get(name="No Type")
+
+    def get_movie_series(self):
+        return self.get(name="Movie Series")
+
+    def get_other(self):
+        return self.get(name="Other")
+
+    def get_audiobooks(self):
+        return self.get(name="Audiobooks")
+
+    def get_movies(self):
+        return self.get(name="Movies")
+
+    def get_home_video(self):
+        return self.get(name="Home Videos")
+
+
 class TorrentType(models.Model):
     ACTION_DO_NOTHING = "Nothing"
     ACTION_COPY = "Copy"
@@ -24,6 +45,8 @@ class TorrentType(models.Model):
     name = models.CharField(max_length=255)
     action_on_finish = models.CharField(default="Nothing", max_length=50)
     target_dir = models.TextField(null=True, blank=True, default=None)
+
+    objects = TorrentTypeManager()
 
 
 class Torrent(models.Model):
@@ -118,9 +141,14 @@ class TorrentTorBoxSearch(models.Model):
     date = models.DateTimeField()
 
 
+class TorrentTorBoxSearchResultManager(models.Manager):
+    def filter_by_torrent(self, torrent: Torrent):
+        return self.filter(Q(hash=torrent.hash) | Q(torrent=torrent))
+
+
 class TorrentTorBoxSearchResult(models.Model):
     query = models.ForeignKey(TorrentTorBoxSearch, on_delete=models.CASCADE)
-    hash = models.CharField(max_length=255)
+    hash = models.CharField(max_length=255, db_index=True)
     raw_title = models.TextField()
     title = models.CharField(max_length=255, null=True, blank=True, default=None)
     resolution = models.CharField(max_length=100, null=True, blank=True, default=None)
@@ -138,3 +166,5 @@ class TorrentTorBoxSearchResult(models.Model):
     torrent = models.ForeignKey(
         Torrent, null=True, blank=True, default=None, on_delete=models.SET_NULL
     )
+
+    objects = TorrentTorBoxSearchResultManager()

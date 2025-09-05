@@ -6,3 +6,5 @@ omit =
   */tests/*.py
   */urls.py
   */manage.py
+[report]
+fail_under = 45
