@@ -14,7 +14,7 @@ from .utils import create_torrent, create_torrent_file, create_file
 class StatusMgrTests(TestCase):
     def setUp(self):
         logging.config.dictConfig(console_logging_config)
-        self.no_type = TorrentType.objects.get(name="No Type")
+        self.no_type = TorrentType.objects.get_no_type()
         self.torrent = create_torrent(self.no_type)
 
     def _prepare_torrent_done(self):
@@ -80,3 +80,11 @@ class StatusMgrTests(TestCase):
         )
 
         self.assertEqual(torrent.local_status, status_mgr.client_init)
+
+    def test_remote_client_error(self):
+        status_mgr = StatusMgr.get_instance()
+        torrent = create_torrent(torrent_type=self.no_type)
+        status_mgr.remote_client_error(torrent)
+        torrent.refresh_from_db()
+
+        self.assertEqual(torrent.local_status, status_mgr.client_error)

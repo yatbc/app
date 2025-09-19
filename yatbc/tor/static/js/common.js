@@ -300,7 +300,17 @@ function commonPagination() {
         null,
         this.paginationNewDataCallback,
         this.paginationNewDataCallback);
+    },
+    reloadPagination() {
+      api = this.paginatedPageApi + "/" + this.currentIndex + "/" + this.step
+      this.callApi(
+        api,
+        "",
+        "",
+        "GET",
+        null,
+        this.paginationNewDataCallback,
+        this.paginationNewDataCallback);
     }
-
   }
 }

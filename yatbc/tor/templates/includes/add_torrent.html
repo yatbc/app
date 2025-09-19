@@ -1,0 +1,56 @@
+<div class="modal" :class="{ 'd-block': showAddTorrentModal }" tabindex="-1" role="dialog" aria-modal="true"
+  x-show="showAddTorrentModal" @click.outside="showAddTorrentModal = false" style="display: none;">
+  <div class="modal-dialog modal-dialog-centered modal-lg" role="document">
+    <div class="modal-content rounded-2 shadow">
+      <div class="modal-header border-bottom-0">
+        <h1 class="modal-title fs-5">Add torrent</h1>
+        <button type="button" class="btn-close" aria-label="Close" @click="showAddTorrentModal = false"></button>
+      </div>
+      <div class="modal-body py-4">
+        <div>
+          <p>
+            <strong>Note:</strong> In case of no free download slots, YATBC will add file to internal queue.
+          </p>
+
+          <div class="mb-3">
+            <label for="magnet" class="form-label">Magnet</label>
+            <textarea id="magnet" x-model="magnetValue" rows="3" @input="validateMagnet()" @blur="validateMagnet()"
+              :class="{ 'form-control': true, 'is-invalid': !magnetValid, 'is-valid': magnetValid }"
+              placeholder="Enter magnet link"></textarea>
+          </div>
+          <div class="mb-3">
+            <select class="form-select" x-model="selectedTypeId" id="torrent_type">
+              <template x-for="item in torrent_types_add_torrent" :key="item.id">
+                <option :value="item.id" x-text="item.name"></option>
+              </template>
+            </select>
+          </div>
+          <div class="mb-3">
+            <label for="client" class="form-label">Client type</label>
+            <select class="form-select" id="client">
+
+              <option value="TorBox" selected>TorBox</option>
+              {% if use_transmission %}
+              <option value="Transmission">Transmission</option>
+              {% endif %}
+            </select>
+          </div>
+
+        </div>
+
+
+      </div>
+      <div class="modal-footer d-flex justify-content-end w-100 gap-2 pb-3 border-top-0">
+        <button type="button" class="btn btn-secondary" @click="showAddTorrentModal = false">
+          Close
+        </button>
+
+        <div class="d-flex">
+          <button class="btn btn-primary ms-auto" :disabled="!canAdd"
+            @click="add_torrent(client.value, magnetValue, selectedTypeId)">Add</button>
+        </div>
+
+      </div>
+    </div>
+  </div>
+</div>

@@ -5,49 +5,49 @@ volumes:
     driver_opts:
       type: none
       o: bind
-      device: /data/persistent_data # <--- Specify your host path here, it will be used for persistent data, configurations, logs
+      device: /mnt/persistent_data # <--- Specify your host path here, it will be used for persistent data, configurations, logs
   aria_data:
     driver: local
     driver_opts:
       type: none
       o: bind
-      device: /data/aria2 # <--- Specify your aria2 host path here
+      device: /mnt/aria2 # <--- Specify your aria2 host path here
   movies_data:
     driver: local
     driver_opts:
       type: none
       o: bind
-      device: /data/movies/ # <--- Specify your movies host path here
+      device: /mnt/target/ # <--- Specify your movies host path here
   movie_series_data:
     driver: local
     driver_opts:
       type: none
       o: bind
-      device: /data/movie_series/ # <--- Specify your movie series host path here
+      device: /mnt/target/ # <--- Specify your movie series host path here
   books_data:
     driver: local
     driver_opts:
       type: none
       o: bind
-      device: /data/books/ # <--- Specify your books host path here
+      device: /mnt/target/ # <--- Specify your books host path here
   audio_data:
     driver: local
     driver_opts:
       type: none
       o: bind
-      device: /data/audio/ # <--- Specify your audio host path here
+      device: /mnt/target/ # <--- Specify your audio host path here
   other_data:
     driver: local
     driver_opts:
       type: none
       o: bind
-      device: /data/other/ # <--- Specify your other host path here
+      device: /mnt/target/ # <--- Specify your other host path here
   home_data:
     driver: local
     driver_opts:
       type: none
       o: bind
-      device: /data/home/ # <--- Specify your home videos host path here
+      device: /mnt/target/ # <--- Specify your home videos host path here
 services:  
   yatbc-prepare:    
     image: yatbc/yatbc:gui-latest

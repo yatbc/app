@@ -19,7 +19,6 @@ from ..actiononfinishmgr import (
     clean_title,
     find_existing_dir,
     find_season_dir,
-    StashRescanExitHandler,
 )
 from ..statusmgr import StatusMgr
 from unittest.mock import patch, Mock
@@ -27,7 +26,13 @@ import shutil
 from pathlib import Path
 import logging
 from .temp_settings import console_logging_config
-from .utils import create_torrent, create_torrent_file, create_work_dir, create_file
+from .utils import (
+    create_torrent,
+    create_torrent_file,
+    create_work_dir,
+    create_file,
+    create_search,
+)
 from django.utils import timezone
 from constance import config
 
@@ -66,18 +71,26 @@ class ActionMgrTests(TestCase):
         mock_get_stash.return_value = stash_api
         stash_api.rescan_stash.return_value = True
         config.RESCAN_STASH_ON_HOME_VIDEO = True
-        expected_folder = "stash_folder"
         file, temp_file, work_dir = self._prepare_test(self.home)
+        expected_name = file.torrent.name
         target = create_work_dir(self.home.target_dir)
-        mgr = ActionMgr()
-        mgr.run(file, expected_folder)
-        stash_api.rescan_stash.assert_called_once_with(expected_folder)
 
-        shutil.rmtree(work_dir)
+        mgr = ActionMgr()
+        mgr.run(file.torrent)
+
+        stash_api.rescan_stash.assert_called_once_with(expected_name)
+
+        # shutil.rmtree(work_dir)
         shutil.rmtree(target)
 
-    def _prepare_test(self, torrent_type: TorrentType, file_name="test.txt"):
-        temp_file, work_dir = create_file(file_name)
+    def _prepare_test(
+        self,
+        torrent_type: TorrentType,
+        file_name="test.txt",
+        old_torrent=None,
+        work_dir=None,
+    ):
+        temp_file, work_dir = create_file(file_name, work_dir=work_dir)
         aria_id = "aaaa"
         aria = AriaDownloadStatus.objects.create(
             path=temp_file.as_posix(),
@@ -87,7 +100,10 @@ class ActionMgrTests(TestCase):
             status="complete",
             internal_id=aria_id,
         )
-        torrent = create_torrent(torrent_type)
+        if old_torrent is None:
+            torrent = create_torrent(torrent_type)
+        else:
+            torrent = old_torrent
         file = create_torrent_file(torrent, aria=aria, name=temp_file.name)
         return file, temp_file, work_dir
 
@@ -102,6 +118,12 @@ class ActionMgrTests(TestCase):
         target_dir = create_work_dir("media")
         work = create_work_dir(target_dir / "test movie series [imdbid-tt000]")
         work2 = create_work_dir(target_dir / "some other [imdbid-tt001]")
+        same_name_different_id = create_work_dir(
+            target_dir / "same name [imdbid-tt003]"
+        )
+        same_name_different_id_2 = create_work_dir(
+            target_dir / "same name 2 [imdbid-tt004]"
+        )
         season_dir = create_work_dir(work / "Season 01")
         season_dir_second = Path(work2 / "season 02")
         self.assertEqual(
@@ -116,10 +138,21 @@ class ActionMgrTests(TestCase):
             ),
             season_dir_second,
         )
+
+        self.assertEqual(
+            find_existing_dir(target_dir, "same name", "Test", imdbid="tt003"),
+            same_name_different_id,
+        )
+        self.assertEqual(
+            find_existing_dir(target_dir, "same name 2", "Test", imdbid="tt004"),
+            same_name_different_id_2,
+        )
         self.assertEqual(
             find_existing_dir(target_dir, "Test Movie Series", "Test", 1), season_dir
         )
         self.assertIsNone(find_existing_dir(target_dir, "Unknown", "Test", 1))
+        self.assertIsNone(find_existing_dir(target_dir, "Test Movie Ser", "Test"))
+        self.assertIsNone(find_existing_dir(target_dir, "other some", "Test"))
         shutil.rmtree(target_dir)
 
     def test_clean_title(self):
@@ -139,37 +172,47 @@ class ActionMgrTests(TestCase):
         title, season, episode = get_metadata_by_file(
             file_name="Magic. Series S1E2.mp4"
         )
-        self.assertEqual("Magic. Series", title)
+        self.assertEqual("Magic Series", title)
         self.assertEqual(1, season)
         self.assertEqual(2, episode)
 
         title, season, episode = get_metadata_by_file(file_name="Magic. Series.mp4")
-        self.assertEqual("Magic. Series", title)
+        self.assertEqual("Magic Series", title)
         self.assertIsNone(season)
         self.assertIsNone(episode)
 
         title, season, episode = get_metadata_by_file(file_name="Magic Series s04.mp4")
-        self.assertEqual("Magic Series", title)
-        self.assertEqual(4, season)
+        self.assertEqual("Magic Series s04", title)
+        self.assertIsNone(season)  # no episode, so probably something other then s/e
         self.assertIsNone(episode)
 
-    def _create_search(self, query, title, season, episode, torrent=None):
-        query = TorrentTorBoxSearch.objects.create(query=query, date=timezone.now())
-        return TorrentTorBoxSearchResult.objects.create(
-            query=query,
-            hash="fake",
-            raw_title="empty",
-            title=title,
-            season=season,
-            episode=episode,
-            magnet="fake",
-            age="0",
-            cached=False,
-            last_known_seeders=1,
-            last_known_peers=1,
-            size=1,
-            torrent=torrent,
+        title, season, episode = get_metadata_by_file(
+            file_name="TestMovie.S01.Ble.720p/TestMovie.S01E02.Local.720p.mkv"
         )
+        self.assertEqual("TestMovie", title)
+        self.assertEqual(1, season)
+        self.assertEqual(2, episode)
+
+        title, season, episode = get_metadata_by_file(
+            file_name="Test Series Season 2 [2160p x265 10bit S123 Extra]/Test Series S02E03 [2160p x2].mp4"
+        )
+        self.assertEqual("Test Series", title)
+        self.assertEqual(2, season)
+        self.assertEqual(3, episode)
+
+        title, season, episode = get_metadata_by_file(
+            file_name="Wrong Folder Season.3 Completed Extra Text/Ok Movie Series Season 03 Episode 04.mp4"
+        )
+        self.assertEqual("Ok Movie Series", title)
+        self.assertEqual(3, season)
+        self.assertEqual(4, episode)
+
+        title, season, episode = get_metadata_by_file(  # this is not a movie/series
+            file_name="Wrong Folder Season.1 Completed Extra Text/Ok Movie Series Season 01 Episode 01 Some More Extra Text/Some extra.txt"
+        )
+        self.assertEqual("Some extra", title)
+        self.assertIsNone(season)
+        self.assertIsNone(episode)
 
     def test_get_metadata_by_search(self):
         title, season, episode, imdbid = get_metadata_by_search(None)
@@ -178,7 +221,7 @@ class ActionMgrTests(TestCase):
         self.assertIsNone(episode)
         self.assertIsNone(imdbid)
 
-        search = self._create_search(
+        search = create_search(
             query="tt0000/s1/E2", title="Magic test", season=None, episode=None
         )
         title, season, episode, imdbid = get_metadata_by_search(search)
@@ -187,9 +230,7 @@ class ActionMgrTests(TestCase):
         self.assertEqual(episode, 2)
         self.assertEqual(imdbid, "tt0000")
 
-        search = self._create_search(
-            query="tt1", title="Magic test", season=2, episode=3
-        )
+        search = create_search(query="tt1", title="Magic test", season=2, episode="3")
         title, season, episode, imdbid = get_metadata_by_search(search)
         self.assertEqual(title, "Magic test")
         self.assertEqual(season, 2)
@@ -199,21 +240,27 @@ class ActionMgrTests(TestCase):
     def test_action_factory_nothing(self):
         file, temp_file, work_dir = self._prepare_test(self.no_type)
         factory = ActionFactory()
-        action = factory.create_action(file=file, torrent_dir="")
+        action = factory.create_action(
+            torrent=file.torrent, torrent_dir="", files=[file]
+        )
         self.assertTrue(isinstance(action, ActionNothing))
         shutil.rmtree(work_dir)
 
     def test_action_factory_copy(self):
         file, temp_file, work_dir = self._prepare_test(self.other)
         factory = ActionFactory()
-        action = factory.create_action(file=file, torrent_dir="")
+        action = factory.create_action(
+            torrent=file.torrent, torrent_dir="", files=[file]
+        )
         self.assertTrue(isinstance(action, ActionCopy))
         shutil.rmtree(work_dir)
 
     def test_action_factory_move(self):
         file, temp_file, work_dir = self._prepare_test(self.audio)
         factory = ActionFactory()
-        action = factory.create_action(file=file, torrent_dir="")
+        action = factory.create_action(
+            torrent=file.torrent, torrent_dir="", files=[file]
+        )
         self.assertTrue(isinstance(action, ActionMove))
         shutil.rmtree(work_dir)
 
@@ -221,13 +268,13 @@ class ActionMgrTests(TestCase):
         file, temp_file, work_dir = self._prepare_test(
             self.movie_series, file_name="test.mp4"
         )
-        search = self._create_search("tt001", "Test Movie Series", 1, 1, file.torrent)
+        search = create_search("tt001", "Test Movie Series", 1, 1, file.torrent)
         mgr = ActionMgr()
         target = create_work_dir(self.movie_series.target_dir)
         self.assertTrue(temp_file.exists())
         self.assertFalse(file.action_on_finish_done)
 
-        mgr.run(file, "wrong/dir")
+        mgr.run(file.torrent)
 
         expected_file = Path(
             target
@@ -239,11 +286,59 @@ class ActionMgrTests(TestCase):
         self.assertFalse(temp_file.exists())
         shutil.rmtree(target)
 
+    def test_move_series_new_dir_multiple_files(self):
+        file, temp_file, work_dir = self._prepare_test(
+            self.movie_series, file_name="test S01E01.mp4"
+        )
+        file2, temp_file2, _ = self._prepare_test(
+            self.movie_series,
+            file_name="test S01E02.mp4",
+            old_torrent=file.torrent,
+            work_dir=work_dir,
+        )
+        file3, temp_file3, _ = self._prepare_test(
+            self.movie_series,
+            file_name="Extra.txt",
+            old_torrent=file.torrent,
+            work_dir=work_dir,
+        )
+
+        search = create_search("tt001", "Test Movie Series", None, None, file.torrent)
+        mgr = ActionMgr()
+        target = create_work_dir(self.movie_series.target_dir)
+        self.assertTrue(temp_file.exists())
+        self.assertFalse(file.action_on_finish_done)
+
+        mgr.run(file.torrent)
+
+        expected_file = Path(
+            target
+            / "Test Movie Series [imdbid-tt001]"
+            / "season 01"
+            / "Test Movie Series S01E01.mp4"
+        )
+        expected_file2 = Path(
+            target
+            / "Test Movie Series [imdbid-tt001]"
+            / "season 01"
+            / "Test Movie Series S01E02.mp4"
+        )
+        expected_file3 = Path(
+            target / "Test Movie Series [imdbid-tt001]" / "season 01" / "Extra.txt"
+        )
+        self.assertTrue(expected_file.exists())
+        self.assertTrue(expected_file2.exists())
+        self.assertTrue(expected_file3.exists())
+        self.assertFalse(temp_file.exists())
+        self.assertFalse(temp_file2.exists())
+        self.assertFalse(temp_file3.exists())
+        shutil.rmtree(target)
+
     def test_move_series_old_dir(self):
         file, temp_file, work_dir = self._prepare_test(
             self.movie_series, file_name="test.mp4"
         )
-        search = self._create_search("tt001", "Test Movie Series", 2, 1, file.torrent)
+        search = create_search("tt001", "Test Movie Series", 2, 1, file.torrent)
         mgr = ActionMgr()
         target = create_work_dir(self.movie_series.target_dir)
         movie_series_dir = create_work_dir(target / "Test Movie Series [imdbid-tt001]")
@@ -251,7 +346,7 @@ class ActionMgrTests(TestCase):
         self.assertTrue(temp_file.exists())
         self.assertFalse(file.action_on_finish_done)
 
-        mgr.run(file, "wrong/dir")
+        mgr.run(file.torrent)
 
         expected_file = Path(season / "Test Movie Series S02E01.mp4")
         self.assertFalse(temp_file.exists())
@@ -269,7 +364,7 @@ class ActionMgrTests(TestCase):
         self.assertTrue(temp_file.exists())
         self.assertFalse(file.action_on_finish_done)
 
-        mgr.run(file, "wrong/dir")
+        mgr.run(file.torrent)
 
         expected_file = Path(season / "Test Movie Series S03E02.mp4")
         self.assertFalse(temp_file.exists())
@@ -283,7 +378,8 @@ class ActionMgrTests(TestCase):
         self.assertTrue(temp_file.exists())
         self.assertFalse(file.action_on_finish_done)
 
-        mgr.run(file=file, torrent_dir=target.as_posix())
+        mgr.run(file.torrent)
+        file.refresh_from_db()
 
         # action nothing does nothing, so nothing should change, except for file action state
         self.assertTrue(file.action_on_finish_done)
@@ -298,13 +394,13 @@ class ActionMgrTests(TestCase):
         file, temp_file, work_dir = self._prepare_test(
             self.movies, file_name="test.mp4"
         )
-        search = self._create_search("tt001", "Test Movie", None, None, file.torrent)
+        search = create_search("tt001", "Test Movie", None, None, file.torrent)
         mgr = ActionMgr()
         target = create_work_dir(self.movies.target_dir)
         self.assertTrue(temp_file.exists())
         self.assertFalse(file.action_on_finish_done)
 
-        mgr.run(file, "wrong/dir")
+        mgr.run(file.torrent)
 
         expected_file = Path(target / "Test Movie [imdbid-tt001]" / "Test Movie.mp4")
         self.assertTrue(expected_file.exists())

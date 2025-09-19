@@ -7,8 +7,10 @@ from .models import (
     TorrentFile,
     TorrentStatus,
     TorrentHistory,
+    ArrErrorLog,
 )
-from django.db.models import Q, OuterRef, Subquery
+import math
+from django.db.models import Q, OuterRef, Subquery, ExpressionWrapper, fields, F
 import re
 import logging
 from django.db import connection
@@ -49,7 +51,7 @@ def torrent_file_to_log(file: TorrentFile):
     return f"<i>'{name}'(id: {file.id})</i><br/>"
 
 
-def add_log(message, level, source=None, torrent=None, local_status=None):
+def add_log(message, level, source=None, torrent=None, local_status=None, arr=None):
     logger = logging.getLogger("torbox")
     log = ErrorLog.objects.create(message=message, level=level, source=source)
     if torrent:
@@ -57,11 +59,13 @@ def add_log(message, level, source=None, torrent=None, local_status=None):
         if local_status:  # on "Status" screen
             torrent.local_status = local_status
             torrent.save()
-    if level.name == "ERROR":
+    if arr:
+        ArrErrorLog.objects.create(arr=arr, error_log=log)
+    if level == Level.objects.get_error():
         logger.error(f"Message: {log.message}, source: {log.source}")
-    if level.name == "WARNING":
+    if level == Level.objects.get_warning():
         logger.warning(f"Message: {log.message}, source: {log.source}")
-    if level.name == "INFO":
+    if level == Level.objects.get_info():
         logger.info(f"Message: {log.message}, source: {log.source}")
     return log
 
@@ -101,7 +105,6 @@ def update_double(torrent):
 
 def update_type(torrent: Torrent):
     logger = logging.getLogger("torbox")
-    INFO = Level.objects.get(name="INFO")
     no_type = TorrentType.objects.get(name="No Type")
     if torrent.torrent_type != no_type:
         logger.debug(f"Torrent {torrent} already had a type, skipping type update")
@@ -116,7 +119,7 @@ def update_type(torrent: Torrent):
         torrent.save()
         add_log(
             message=f"Torrent {torrent.name} with hash: {torrent.hash} was added with season/episode marker, updating as movie series type",
-            level=INFO,
+            level=Level.objects.get_info(),
             source="torboxapi",
             torrent=torrent,
         )
@@ -167,7 +170,7 @@ def update_torrent(new_torrent: Torrent):
     status_mgr = StatusMgr.get_instance()
     logger = logging.getLogger("torbox")
     torrent = get_previous_torrent(new_torrent)
-    INFO = Level.objects.get(name="INFO")
+    INFO = Level.objects.get_info()
 
     if torrent:
 
@@ -251,5 +254,44 @@ def get_active_torrents_with_current_history():
     return (
         Torrent.objects.filter(deleted=False)
         .annotate(latest_history_id=Subquery(latest_details_subquery))
+        .annotate(
+            age=ExpressionWrapper(
+                timezone.now() - F("created_at"), output_field=fields.DurationField()
+            )
+        )
         .order_by("client")
     )
+
+
+def get_history_with_age(history_id):
+    return (
+        TorrentHistory.objects.filter(id=history_id)
+        .annotate(
+            ago=ExpressionWrapper(
+                timezone.now() - F("updated_at"), output_field=fields.DurationField()
+            )
+        )
+        .first()
+    )
+
+
+def format_age(age_in_seconds: int):
+    if age_in_seconds < 60:
+        return "<1min"
+    elif age_in_seconds < 3600:
+        minutes = math.floor(age_in_seconds / 60)
+        return f"{minutes}min"
+    elif age_in_seconds < 86400:  # 60 * 60 * 24
+        hours = math.floor(age_in_seconds / 3600)
+        return f"{hours}h"
+    else:
+        days = math.floor(age_in_seconds / 86400)
+        return f"{days}d"
+
+
+def get_active_torrents_with_formatted_age():
+    torrents = get_active_torrents_with_current_history()
+    for obj in torrents:
+        age_in_seconds = obj.age.total_seconds()
+        obj.formatted_age = format_age(age_in_seconds)
+    return torrents

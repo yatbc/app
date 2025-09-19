@@ -1,0 +1,142 @@
+{% include 'includes/theme.html' %}
+{% load static %}
+{% include 'includes/head.html' %}
+<script src="{% static 'js/arr.js' %}"></script>
+</head>
+
+<body>
+    {% include 'includes/navbar.html' %}
+
+    <h1>Arr:</h1>
+    <div x-data="getData()">
+        {% csrf_token %}
+        {% include 'includes/alert.html' %}
+        {% include 'includes/confirm.html' %}
+        {% include 'includes/wait.html' %}
+        {% include 'includes/pagination.html' %}
+        {% include 'includes/edit_arr.html' %}
+        <div x-show="showHelp">
+            <p>This automation will help you download monitored movie-series using TorBox's search feature. Scheduler
+                will
+                process active Arrs once a day. New active Arrs will be scheduled for check in 10 minutes by default.
+            </p>
+            <ul>
+                <li><strong>DEFAULT</strong> row, is a base for every new Arr, edit it for your needs.</li>
+                <li><strong>ANY</strong> is special word for quality, encoder and include_words.
+                    If you want to define quality, encoder or include_words, then Torrent will need to contain any of
+                    defined values.
+                    If you don't want to limit your options to just provided values, use ANY as the last value. For
+                    example:
+                    "1080p,720p,ANY", will prefer 1080p over 720p, but will accept any quality. Similar for encoder
+                    and include_words.
+                </li>
+                <li>Lower and upper case doesn't matter. So <i>ENCODER</i> is the same as <i>encoder</i>.</li>
+                <li>Words in any parameter are treated as words. Example: if you will specify quality as "1080p, 720p"
+                    and one of the matches will be Test.x1080p.720p.mp4, then it will be threated as match with 720p
+                    quality.</li>
+
+                <li>Priorities to find best match are: quality, encoder, count of found include_words, if download is
+                    cached,
+                    count of episodes in torrent, last known seeders.
+                    Example: if the app will find Test.1080p.Encoder.Spanish.mp4 and Test.720p.Encoder.English.mp4.
+                    And you filled Quality as 1080p and include_words as English. The app will pick
+                    Test.1080p.Encoder.Spanish.mp4
+
+                </li>
+                <li>Yellow rows, means they are not active. Arrs become disabled, if last found download was more then 9
+                    days
+                    ago(by default).</li>
+                <li>Green rows, means they are active and will be checked once a day. Usually after 24 hours from last
+                    check
+                    or 10 minutes after new arr creation.</li>
+                <li>Any match on exclude_words will remove download from possible candidates. Example: your
+                    exclude_words are "BadQuality,Junk" and one of found downloads is Test.BadQuality.mp4 then it will
+                    be excluded from possible matches.</li>
+            </ul>
+
+
+
+        </div>
+        <div class="d-flex mb-3">
+            <button class="btn btn-primary me-2" role="button" @click="addNewArr()">Add</a>
+                <button class="btn btn-primary me-2" role="button" @click="showHelp=!showHelp">Show/Hide help</a>
+        </div>
+
+        <table class="table  table-striped table-responsive" style="table-layout: fixed; width: 100%;">
+            <thead>
+                <tr>
+                    <th scope="col" class="d-none d-lg-table-cell">Title</th>
+                    <th scope="col">IMDBid</th>
+                    <th scope="col">Season</th>
+                    <th scope="col">Episode</th>
+                    <th scope="col">Last check</th>
+                    <th scope="col">Last found</th>
+                    <th scope="col" class="d-none d-lg-table-cell">Encoders</th>
+                    <th scope="col" class="d-none d-lg-table-cell">Qualities</th>
+                    <th scope="col" class="d-none d-lg-table-cell">Include</th>
+                    <th scope="col" class="d-none d-lg-table-cell">Exclude</th>
+                    <th scope="col" class="w-25">Actions</th>
+                </tr>
+            </thead>
+
+            <tbody>
+                <template x-if="arr.length > 0">
+                    <template x-for="entry in arr" :key="index">
+
+                        <tr>
+                            <td x-text="entry.title" :class="{
+                    'text-success': entry.active,                    
+                    'text-warning': !entry.active,                    
+                    'truncate-text-cell':true,
+                    'd-none d-lg-table-cell': true,                    
+                } "></td>
+                            <td x-text="entry.imdbid" :class="{
+                    'text-success': entry.active,                    
+                    'text-warning': !entry.active && entry.imdbid != 'DEFAULT',
+                    'text-muted': entry.imdbid == 'DEFAULT'                                       
+                } "></td>
+                            <td x-text="entry.requested_season"></td>
+                            <td x-text="entry.requested_episode"></td>
+                            <td x-text="entry.last_checked_ago"></td>
+                            <td x-text="entry.last_found_ago"></td>
+                            <td x-text="entry.encoder" class="d-none d-lg-table-cell truncate-text-cell"></td>
+                            <td x-text="entry.quality" class="d-none d-lg-table-cell truncate-text-cell"></td>
+                            <td x-text="entry.include_words" class="d-none d-lg-table-cell truncate-text-cell"></td>
+                            <td x-text="entry.exclude_words" class="d-none d-lg-table-cell truncate-text-cell"></td>
+                            <td class="w-25">
+                                <div class="d-flex gap-1">
+                                    <button type="button" class="btn btn-outline-primary btn-sm"
+                                        @click="editArr(entry)">Edit</button>
+
+                                    <button type="button" class="btn btn-outline-info btn-sm"
+                                        x-show="entry.imdbid != 'DEFAULT'" @click="retryArr(entry)">Retry</button>
+                                    <button type="button" class="btn btn-outline-danger btn-sm"
+                                        x-show="entry.imdbid != 'DEFAULT'" @click="removeArr(entry)">Remove</button>
+                                </div>
+                            </td>
+                        </tr>
+
+                    </template>
+                </template>
+                <template x-if="arr.length === 0 && !isLoading">
+                    <tr>
+                        <td colspan="11" class="text-center text-muted py-3">
+                            No movie series monitoring found.
+                        </td>
+                    </tr>
+                </template>
+                <template x-if="arr.length === 0 && isLoading">
+                    <tr>
+                        <td colspan="11" class="text-center text-muted py-3">
+                            Loading movie series monitoring...
+                        </td>
+                    </tr>
+                </template>
+            </tbody>
+
+        </table>
+    </div>
+
+</body>
+
+</html>

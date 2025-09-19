@@ -1,11 +1,11 @@
-function get_add_torrent() {
+function getAddTorrent() {
   return {
-    ...commonCallApi(),
-    torrent_types: [],
+    torrent_types_add_torrent: [],
     selectedTypeId: null,
     magnetValid: false,
     magnetValue: "",
     canAdd: false,
+    showAddTorrentModal: false,
     canCallAdd() {
       this.canAdd = this.magnetValid;
       return this.canAdd;
@@ -16,8 +16,13 @@ function get_add_torrent() {
       this.canCallAdd();
       return this.magnetValid;
     },
+    showAddTorrent() {
+      console.log("Showing add torrent modal");
+      this.showAddTorrentModal = true;
+    },
 
     add_torrent(client, magnet, torrent_type_id) {
+      console.log(`Adding torrent: ${magnet}, type id: ${torrent_type_id}, client: ${client}`);
       this.isLoading = true;
       const body = {
         "torrent_type_id": torrent_type_id,
@@ -25,26 +30,23 @@ function get_add_torrent() {
         "client": client,
 
       };
-      this.callApi("api/add_torrent", "Failed to add torrent", "Torrent sheduled to add", "POST", body);
+      this.callApi("api/add_torrent", "Failed to add torrent", "Torrent scheduled to add", "POST", body);
+      this.magnetValue = "";
+      this.validateMagnet();
+
     },
-    init() {
-      this.setupSSE(update_action = () => {
-        this.isLoading = false;
-        this.showAlert("Torrent added");
-      });
+    initAddTorrent() {
       fetch(`api/get_torrent_type_list`)
         .then((res) => res.json())
         .then((data) => {
-          this.torrent_types = data.torrent_types;
-          const noTypeItem = this.torrent_types.find(item => item.name === 'No Type');
+          this.torrent_types_add_torrent = data.torrent_types;
+          const noTypeItem = this.torrent_types_add_torrent.find(item => item.name === 'No Type');
           if (noTypeItem) {
             this.selectedTypeId = noTypeItem.id;
           }
-          console.log(this.torrent_types);
+
         });
     },
 
-
-    sseSource: null,
   };
 }

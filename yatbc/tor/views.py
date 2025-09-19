@@ -12,11 +12,18 @@ from constance import config
 from django.shortcuts import redirect
 from django_tasks import default_task_backend
 from pathlib import Path
-from django.utils import timezone, dateformat
+from django.utils import timezone
 import json
 import requests
+from django.db import IntegrityError
 from .queuemgr import get_queue_folders, get_active_queue, get_queue_count
-from .commondao import get_active_torrents_with_current_history
+from .common import get_name_from_magnet
+from .commondao import (
+    get_active_torrents_with_formatted_age,
+    format_age,
+    get_history_with_age,
+)
+from .arrmanager import get_all_arrs
 from .models import (
     Torrent,
     TorrentHistory,
@@ -26,6 +33,7 @@ from .models import (
     ErrorLog,
     TorrentFile,
     TorrentQueue,
+    ArrMovieSeries,
 )
 from .tasks import (
     queue_torbox_status,
@@ -42,6 +50,7 @@ from .tasks import (
     not_status_checking,
     ResultStatus,
     queue_import_from_queue_folders,
+    process_arr_task,
 )
 
 from .torboxapi import validate_api, add_referral_api
@@ -83,12 +92,19 @@ def data_updates(request):
             path = ""
             no_active_tasks_count = 0
             worker_not_responding_threshold = 10
+            previous_done_tasks_count = 0
+            current_done_tasks_count = 0
             while True:
                 task_done, path = yield from wait_for_done(previous_path=path)
                 if task_done is None:
                     no_active_tasks_count += 1
                 else:
                     no_active_tasks_count = 0
+                previous_done_tasks_count = current_done_tasks_count
+                current_done_tasks_count = get_tasks(
+                    exclude_tasks_type=not_status_checking,
+                    status=[ResultStatus.SUCCEEDED, ResultStatus.FAILED],
+                ).count()
 
                 queued_tasks = [
                     item
@@ -106,7 +122,16 @@ def data_updates(request):
                     time.sleep(2)
                     continue
 
-                if not queued_tasks and task_done:
+                if not queued_tasks and (
+                    task_done or current_done_tasks_count > previous_done_tasks_count
+                ):
+                    if (
+                        current_done_tasks_count > previous_done_tasks_count
+                        and not task_done
+                    ):
+                        logger.debug(
+                            f"Current done tasks count: {current_done_tasks_count}, previous done tasks count: {previous_done_tasks_count}"
+                        )
                     yield f"data: {json.dumps({'status': 'Update'})}\n\n"
                     time.sleep(2)
                     continue
@@ -304,6 +329,109 @@ def get_history(request, current=0, limit=20):
         result.append(entry)
 
     return JsonResponse({"history": result}, safe=False)
+
+
+def remove_arr(request, arr_id: int):
+    arr = ArrMovieSeries.objects.filter(id=arr_id)
+    if arr:
+        arr.delete()
+        return JsonResponse({"status": "Ok"}, safe=False)
+    return JsonResponse({"error": f"Arr: {arr_id} didn't exist"}, safe=False)
+
+
+def change_arr_activity(request, arr_id: int):
+    arr = ArrMovieSeries.objects.filter(id=arr_id).first()
+    if arr:
+        arr.active = not arr.active
+        arr.save()
+        return JsonResponse({"status": "Ok"}, safe=False)
+    return JsonResponse({"error": f"Arr: {arr_id} doesn't exist"}, safe=False)
+
+
+def save_arr(request):
+    logger = logging.getLogger("torbox")
+    if request.method == "POST":
+        body = json.loads(request.body)
+        logger.debug(f"Save arr request body: {body}, type: {type(body)}")
+        if "imdbid" in body:
+            imdbid = body["imdbid"]
+            quality = body.get("quality", "")
+            include_words = body.get("include_words", "")
+            exclude_words = body.get("exclude_words", "")
+            season = body.get("requested_season", 1)
+            episode = body.get("requested_episode", 1)
+            encoder = body.get("encoder", "")
+            id = body.get("id", None)
+            torrent_type = TorrentType.objects.get_movie_series()
+            if id:
+                arr = ArrMovieSeries.objects.get(pk=id)
+                arr.imdbid = imdbid
+                arr.quality = quality
+                arr.include_words = include_words
+                arr.exclude_words = exclude_words
+                arr.requested_season = season
+                arr.requested_episode = episode
+                arr.encoder = encoder
+                arr.save()
+            else:
+                try:
+                    arr = ArrMovieSeries.objects.create(
+                        imdbid=imdbid,
+                        quality=quality,
+                        encoder=encoder,
+                        include_words=include_words,
+                        exclude_words=exclude_words,
+                        requested_season=season,
+                        requested_episode=episode,
+                        torrent_type=torrent_type,
+                    )
+                except IntegrityError as e:
+                    return JsonResponse({"error": "Imdbid already existed"}, safe=False)
+            return JsonResponse(model_to_dict(arr), safe=False)
+
+        else:
+            logger.warning(f"Wrong body in save_arr: {body}")
+    return JsonResponse({"error": "Invalid request"}, safe=False)
+
+
+def retry_arr(request, arr_id: int):
+    process_arr_task.enqueue(arr_id)
+    return JsonResponse(
+        {"status": "Ok"}, safe=False
+    )  # don't return task id, arr, doesn't monitor task statuses
+
+
+def get_arr(request, current=0, limit=20):
+    if current < 0:
+        current = 0
+    if limit < 0:
+        limit = 1
+    logger = logging.getLogger("torbox")
+    logger.info("Loading arr")
+    arr = get_all_arrs()
+    arr = arr[current : current + limit]
+    result = []
+    for entry in arr:
+        dict_entry = model_to_dict(entry)
+        dict_entry["last_found_ago"] = (
+            format_age(entry.last_found_ago.total_seconds())
+            if entry.last_found_ago
+            else ""
+        )
+        dict_entry["last_checked_ago"] = (
+            format_age(entry.last_checked_ago.total_seconds())
+            if entry.last_checked_ago
+            else ""
+        )
+        result.append(dict_entry)
+
+    return JsonResponse(
+        {
+            "arr": result,
+            "defaultArr": model_to_dict(ArrMovieSeries.objects.get(imdbid="DEFAULT")),
+        },
+        safe=False,
+    )
 
 
 def get_logs(request, current=0, limit=20):
@@ -738,7 +866,9 @@ def double_torrent_api(request, id):
 
 
 def get_search_results(request, query, season=0, episode=0):
-    torrent = TorrentTorBoxSearch.objects.filter(query=query).order_by("-date")
+    torrent = TorrentTorBoxSearch.objects.filter_by_query_season_episode(
+        query=query, season=season, episode=episode
+    ).order_by("-date")
     if not torrent:
         return JsonResponse({"torrents": {}}, safe=False)
     result = TorrentTorBoxSearchResult.objects.filter(query=torrent[0]).order_by(
@@ -750,19 +880,24 @@ def get_search_results(request, query, season=0, episode=0):
 
 
 def get_torrents():
-    torrent_with_latest_details = get_active_torrents_with_current_history()
+    torrent_with_latest_details = get_active_torrents_with_formatted_age()
     result = []
     summary = {"down": 0, "up": 0}
     for torrent_instance in torrent_with_latest_details:
         latest_history = None
         if torrent_instance.latest_history_id:
-            latest_history = TorrentHistory.objects.get(
-                id=torrent_instance.latest_history_id
+            latest_history = get_history_with_age(torrent_instance.latest_history_id)
+            latest_history.last_updated_ago = format_age(
+                latest_history.ago.total_seconds()
             )
         torrent_instance = shorten_torrent_name(torrent_instance)
         summary["down"] += latest_history.download_speed
         summary["up"] += latest_history.upload_speed
         torrent = model_to_dict(torrent_instance)
+        torrent["formatted_age"] = torrent_instance.formatted_age
+
+        history = model_to_dict(latest_history)
+        history["last_updated_ago"] = latest_history.last_updated_ago
         torrent["local_status"] = model_to_dict(torrent_instance.local_status)
         torrent["local_status"]["level"] = model_to_dict(
             torrent_instance.local_status.level
@@ -770,7 +905,7 @@ def get_torrents():
         result.append(
             {
                 "torrent": torrent,
-                "history": model_to_dict(latest_history),
+                "history": history,
             }
         )
     return result, summary
@@ -822,7 +957,7 @@ def api_get_active_queue(request):
         queue = [
             {
                 "id": entry.id,
-                "magnet": entry.magnet,
+                "magnet": get_name_from_magnet(entry.magnet),
                 "torrent_file": entry.torrent_file_name,
                 "added_at": entry.added_at.isoformat(),
                 "priority": entry.priority,
@@ -998,5 +1133,14 @@ def search_torrent(request, query, season=0, episode=0):
         "use_dark": config.USE_DARK,
         "task_id": result.id,
         "use_transmission": config.USE_TRANSMISSION,
+    }
+    return HttpResponse(template.render(context, request))
+
+
+def arr(request):
+    template = loader.get_template("arr.html")
+    context = {
+        "use_cdn": config.USE_CDN,
+        "use_dark": config.USE_DARK,
     }
     return HttpResponse(template.render(context, request))

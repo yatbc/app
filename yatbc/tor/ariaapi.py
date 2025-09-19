@@ -5,18 +5,12 @@ import shutil
 from pathlib import Path
 from django.utils import timezone
 from django.db.models import Q
-from .models import (
-    AriaDownloadStatus,
-    TorrentFile,
-    Torrent,
-    TorrentType,
-)
+from .models import AriaDownloadStatus, TorrentFile, Torrent, TorrentType, Level
 from .statusmgr import StatusMgr
 
 from constance import config
 import random
 from .commondao import (
-    prepare_torrent_dir_name,
     torrent_file_to_log,
     torrent_to_log,
     clean_html,
@@ -103,7 +97,7 @@ class AriaApi:
         except Exception as e:
             add_log(
                 message=f"Could not download file: <i>'{link}'</i> to <i>'{target_folder}/{target_name}'</i>: <i>'{clean_html(e)}'</i>",
-                level=StatusMgr.get_instance().ERROR,
+                level=Level.objects.get_error(),
                 source="ariaapi",
                 torrent=torrent,
             )
@@ -232,12 +226,13 @@ def update_status(aria_internal_id, api=None):
     status_mgr.aria_progress(
         torrent,
         message=f"Aria download updated. Progress: {format_log_value(status.progress)}, aria_id: {format_log_value(aria_internal_id)}, file: {torrent_file_to_log(file)}, status: {format_log_value(status.status)}",
+        done_downloading=status.done,
+        file=file,
     )
 
 
 def calculate_progress(files: TorrentFile):
     logger = logging.getLogger("torbox")
-    status_mgr = StatusMgr.get_instance()
     if len(files) == 0:
         logger.warning("No files found for torrent, returning 0 progress")
         return 0, 0, False
@@ -250,7 +245,7 @@ def calculate_progress(files: TorrentFile):
         if not file.aria:
             add_log(
                 message=f"File: {torrent_file_to_log(file)} has no Aria id, but torrent has local download set to true: {torrent_to_log(file.torrent)}",
-                level=status_mgr.WARNING,
+                level=Level.objects.get_warning(),
                 source="ariaapi",
                 torrent=file.torrent,
             )
@@ -259,18 +254,12 @@ def calculate_progress(files: TorrentFile):
         progress += file.aria.progress
         if file.aria.done:
             done.append(file.aria.done)
-            add_log(
-                message=f"File: {torrent_file_to_log(file)} has finished downloading in Aria",
-                level=status_mgr.INFO,
-                source="ariaapi",
-                torrent=file.torrent,
-            )
 
     if total == 0:
         logger.warning(f"Torrent has no total value")
         add_log(
             message=f"Torrent has no total value: {torrent_to_log(files[0].torrent)}, is Aria working? Remove {torrent_file_to_log(file)} and try again. If this happens often, check your Aria settings.",
-            level=status_mgr.WARNING,
+            level=Level.objects.get_warning(),
             source="ariaapi",
             torrent=files[0].torrent,
         )
@@ -278,43 +267,12 @@ def calculate_progress(files: TorrentFile):
     return total, progress, done
 
 
-def exec_action_on_file(file: TorrentFile, torrent_type: TorrentType, torrent_dir: str):
+def exec_action_on_finish(torrent: Torrent):
     from .actiononfinishmgr import ActionMgr
 
     mgr = ActionMgr()
 
-    mgr.run(file, torrent_dir)
-
-
-def exec_action_on_finish(torrent: Torrent):
-    logger = logging.getLogger("torbox")
-    status_mgr = StatusMgr.get_instance()
-    actions = TorrentFile.objects.filter(
-        torrent=torrent, action_on_finish_done=False, aria__done=True
-    )
-    status_mgr.action_start(
-        torrent=torrent,
-        message=f"Executing action on finish for torrent: {torrent_to_log(torrent)}, actions to finish: {len(actions)}",
-    )
-    torrent_dir_name = prepare_torrent_dir_name(
-        torrent.name
-    )  # dir, where all torrent files will be stored in target dir(target dir is based on torrent_type)
-    all_done = True
-    for file in actions:
-        if file.aria and file.aria.done:
-            logger.debug(f"Executing action on file: {file} for torrent: {torrent}")
-            exec_action_on_file(file, torrent.torrent_type, torrent_dir_name)
-        else:
-            all_done = False
-            add_log(
-                message=f"File: {torrent_file_to_log(file)} is not done, skipping action execution for torrent: {torrent_to_log(torrent)}",
-                level=status_mgr.WARNING,
-                source="ariaapi",
-                torrent=torrent,
-            )
-
-    if all_done:
-        status_mgr.torrent_done(torrent=torrent)
+    mgr.run(torrent)
 
 
 def check_local_download_status(api=None):
@@ -345,6 +303,7 @@ def check_local_download_status(api=None):
             )
             continue
         torrent.local_download_progress = progress / total
+        torrent.save()
         logger.debug(f"Updating progress: {torrent} {torrent.local_download_progress}")
         if len(done) == len(files):
             status_mgr.aria_done(torrent=torrent)

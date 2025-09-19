@@ -1,6 +1,8 @@
 function getData() {
   return {
     ...commonCallApi(),
+    ...getAddTorrent(),
+
     torrents: [],
     summary: [],
     torrent_types: [],
@@ -33,6 +35,7 @@ function getData() {
     },
     init() {
       this.isLoading = true;
+      this.initAddTorrent();
       this.initBootstrapHints();
       this.setupSSE(
         (update_action = () => {

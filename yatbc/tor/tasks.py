@@ -12,6 +12,7 @@ from .transmissionapi import (
     transmission_add_torrent,
     transmission_delete_torrent,
 )
+from .arrmanager import get_next_arrs, process_arr, arrs_to_str
 from .ariaapi import check_local_download_status, exec_action_on_finish
 import logging
 from datetime import timedelta
@@ -78,7 +79,7 @@ def process_queue_task():
 @task()
 def torbox_request_torrent_files(torrent_id):
     logger = logging.getLogger("torbox")
-    logger.info(f"Requesting torrent files: {torrent_id}")
+    logger.info(f"Requesting torrent files for torrent id: {torrent_id}")
     request_dl(torrent_id)
     logger.info("Request done")
 
@@ -141,6 +142,31 @@ def exec_action_on_file_task(torrent_id):
     logger.info("Action on file task done")
 
 
+@task(priority=-1)  # process in free time, to not spam
+def process_arr_task(arr_id: int):
+    logger = logging.getLogger("torbox")
+    logger.info(f"Process arr task will work on: arr_id: {arr_id}")
+    _, status = process_arr(arr_id)
+    if status:
+        logger.info(f"Arr manager found next episode, queueing again")
+        start_time = timezone.now() + timedelta(seconds=30)
+        next_schedule = process_arr_task.using(
+            run_after=start_time
+        )  # don't spam it, wait for 30s
+        next_schedule.enqueue(arr_id)
+
+
+@task()
+def schedule_arrs_tasks():
+    logger = logging.getLogger("torbox")
+    arrs = get_next_arrs()
+    if not arrs:
+        return
+    logger.debug(f"Will schedule {len(arrs)} arrs")
+    for arr in arrs:
+        process_arr_task.enqueue(arr.id)
+
+
 def check_status():
     result = queue_check_local_download_status()
     result = queue_torbox_status()
@@ -151,7 +177,9 @@ def check_status():
 
 def get_tasks(exclude_tasks_type=[], status=[]):
     query = (
-        DBTaskResult.objects.filter(status__in=status)
+        DBTaskResult.objects.filter(
+            status__in=status, enqueued_at__gte=timezone.now() - timedelta(days=1)
+        )
         .exclude(task_path__in=exclude_tasks_type)
         .all()
     )
@@ -171,9 +199,7 @@ def get_task_queued_or_running(task_type):
     )
 
 
-not_status_checking = [
-    "tor.tasks.schedule_tasks",
-]
+not_status_checking = ["tor.tasks.schedule_tasks", "tor.tasks.schedule_arrs_tasks"]
 
 
 def queue_transmission_status():
@@ -183,6 +209,18 @@ def queue_transmission_status():
     if not result:
         logger.info(f"Queuing: {task_type}")
         return transmission_status_task.enqueue()
+    else:
+        logger.debug(f"Task {task_type} is already queued or running: {result}")
+        return result
+
+
+def queue_schedule_arrs_tasks():
+    logger = logging.getLogger("torbox")
+    task_type = "tor.tasks.schedule_arrs_tasks"
+    result = get_task_queued_or_running(task_type)
+    if not result:
+        logger.info(f"Queuing: {task_type}")
+        return schedule_arrs_tasks.enqueue()
     else:
         logger.debug(f"Task {task_type} is already queued or running: {result}")
         return result
@@ -257,6 +295,7 @@ def schedule_tasks():
     check_status()
     queue_import_from_queue_folders()
     queue_process_queue()
+    queue_schedule_arrs_tasks()
     next_schedule = schedule_tasks.using(run_after=start_time)
     next_schedule.enqueue()
     logger.info("Scheduling done")

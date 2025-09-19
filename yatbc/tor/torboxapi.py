@@ -80,7 +80,7 @@ class TorBoxApi:
         except Exception as e:
             add_log(
                 message=f"Could not get user data to read download slots: {format_log_value(e)}, assuming 3",
-                level=self.status_mgr.ERROR,
+                level=Level.objects.get_error(),
                 source="torboxapi",
             )
         return 3
@@ -98,7 +98,7 @@ class TorBoxApi:
         except Exception as e:
             add_log(
                 message=f"Could not add torrent: {format_log_value(e)}",
-                level=self.status_mgr.ERROR,
+                level=Level.objects.get_error(),
                 source="torboxapi",
             )
         return None
@@ -136,7 +136,7 @@ class TorBoxApi:
             self.logger.error(e)
             add_log(
                 message=f"Could not change torrent: {torrent_to_log(torrent)}, {action}: {e}",
-                level=self.status_mgr.ERROR,
+                level=Level.objects.get_error(),
                 source="torboxapi",
                 torrent=torrent,
             )
@@ -160,7 +160,7 @@ class TorBoxApi:
         self.logger.error(f"Failed to search torrent: {query}, {result.reason}")
         add_log(
             message=f"Could not get result from torbox search api for query: <i>'{clean_html(query)}'</i>: reason: <i>'{clean_html(result.reason)}'</i>",
-            level=self.status_mgr.ERROR,
+            level=Level.objects.get_error(),
             source="torboxapi",
         )
         return None
@@ -178,7 +178,7 @@ class TorBoxApi:
             if result.error:
                 add_log(
                     message=f"Failed to access tor api: {clean_html(result.error)}",
-                    level=self.status_mgr.ERROR,
+                    level=Level.objects.get_error(),
                     source="torboxapi",
                 )
                 return None
@@ -190,7 +190,7 @@ class TorBoxApi:
         except Exception as e:
             add_log(
                 message=f"Could not get torrents: {clean_html(e)}",
-                level=self.status_mgr.ERROR,
+                level=Level.objects.get_error(),
                 source="torboxapi",
             )
             return None
@@ -207,7 +207,7 @@ class TorBoxApi:
             if not result.success:
                 add_log(
                     message=f"Could not request download link for torrent {torrent_to_log(torrent)} file {torrent_file_to_log(file)}: <i>'{clean_html(result.error)}'</i>",
-                    level=self.status_mgr.ERROR,
+                    level=Level.objects.get_error(),
                     source="torboxapi",
                     torrent=torrent,
                 )
@@ -216,7 +216,7 @@ class TorBoxApi:
         except Exception as e:
             add_log(
                 message=f"Could not request download link for torrent {torrent_to_log(torrent)} file {torrent_file_to_log(file)}: {clean_html(e)}",
-                level=self.status_mgr.ERROR,
+                level=Level.objects.get_error(),
                 source="torboxapi",
                 torrent=torrent,
             )
@@ -236,27 +236,55 @@ def update_available_slots(api=None, force=False):
         config.NEXT_MAX_DOWNLOAD_TORBOX_SLOTS_CHECK = date.today() + timedelta(days=7)
 
 
-def search_torrent(query, season, episode, api=None):
+def search_torrent(query, season, episode, api=None) -> TorrentTorBoxSearch | None:
     logger = logging.getLogger("torbox")
     logger.info(f"Searching for: {query} {season} {episode}")
+    query_filter = TorrentTorBoxSearch.objects.filter_by_query_season_episode(
+        query=query, season=season, episode=episode
+    )
+    latest = query_filter.order_by("-date").first()
+
+    if latest:
+        latest_age = timezone.now() - latest.date
+        if latest_age < timezone.timedelta(hours=1):
+            logger.info(f"Search for: {query} is only {latest_age}, skipping")
+            return latest
     if not api:
         api = TorBoxApi()
     result = api.search_torrent(query, season=season, episode=episode)
     if not result:
         return None
-    logger.info(f"Got new data, removing previous query {query}")
-    TorrentTorBoxSearch.objects.filter(query=query).delete()
+
     torrent_search = TorrentTorBoxSearch()
+    previous = []
+    if latest:
+        logger.info(f"Got new data, removing unassigned results from previous {query}")
+        TorrentTorBoxSearchResult.objects.delete_unassigned(query=latest)
+        torrent_search = latest
+        previous = TorrentTorBoxSearchResult.objects.filter(query=latest).values_list(
+            "hash", flat=True
+        )
+
     torrent_search.date = timezone.now()
     torrent_search.query = query
+    torrent_search.episode = episode
+    torrent_search.season = season
     torrent_search.save()
+    new_search_results = []
     for torrent in result["data"]["torrents"]:
+        hash = torrent["hash"]
+        if hash in previous:
+            logger.debug(f"Skipping saving of: {hash}, because it was already assigned")
+            continue
         torrent_search_result = TorrentTorBoxSearchResult()
+
         torrent_search_result.raw_title = torrent["raw_title"]
         torrent_search_result.query = torrent_search
-        torrent_search_result.hash = torrent["hash"]
+        torrent_search_result.hash = hash
         torrent_search_result.age = torrent["age"]
         try:
+            if "title" in torrent:
+                torrent_search_result.title = torrent["title"]
             if "title_parsed_data" in torrent:
                 parsed = torrent["title_parsed_data"]
                 if "year" in parsed:
@@ -266,36 +294,40 @@ def search_torrent(query, season, episode, api=None):
                 if "codec" in parsed:
                     torrent_search_result.codec = parsed["codec"]
                 if "season" in parsed and not isinstance(parsed["season"], list):
-                    try:
-                        torrent_search_result.season = int(parsed["season"])
-                    except ValueError:
-                        logger.error(
-                            f"Could not parse season: {parsed['season']} for torrent: {torrent_search_result.hash}"
-                        )
-                        torrent_search_result.season = None
-                if "episode" in parsed:
-                    torrent_search_result.episode = int(parsed["episode"])
+                    torrent_search_result.season = int(parsed["season"])
+                else:
+                    torrent_search_result.season = None
+                if "episode" in parsed and not isinstance(parsed["episode"], list):
+                    torrent_search_result.episode = parsed["episode"]
+                elif "episode" in parsed and isinstance(parsed["episode"], list):
+                    torrent_search_result.episode = ",".join(
+                        [str(episode) for episode in parsed["episode"]]
+                    )
+                else:
+                    torrent_search_result.episode = None
                 if "episodeName" in parsed:
                     torrent_search_result.episode_name = parsed["episodeName"]
-            if "title" in torrent:
-                torrent_search_result.title = torrent["title"]
+
         except Exception as e:
-            logger.error(f"Could not parse: {e}")
+            logger.error(f"Could not parse: {e}, {torrent}")
         torrent_search_result.magnet = torrent["magnet"]
         torrent_search_result.last_known_peers = torrent["last_known_peers"]
         torrent_search_result.last_known_seeders = torrent["last_known_seeders"]
         torrent_search_result.size = torrent["size"]
         torrent_search_result.cached = torrent["cached"]
-        previous = Torrent.objects.filter(hash=torrent_search_result.hash)
-        if previous:
-            torrent_search_result.torrent = previous[0]
-            add_log(
-                message=f"Torrent: {torrent_to_log(torrent_search_result.torrent)} already exists in search for: <i>'{clean_html(query)}'</i>",
-                level=StatusMgr.get_instance().INFO,
-                source="torboxapi",
-                torrent=torrent_search_result.torrent,
-            )
-        torrent_search_result.save()
+        if not torrent_search_result.torrent:
+            previous = Torrent.objects.filter(hash=torrent_search_result.hash)
+            if previous:
+                torrent_search_result.torrent = previous[0]
+                add_log(
+                    message=f"Torrent: {torrent_to_log(torrent_search_result.torrent)} already exists in search for: <i>'{clean_html(query)}'</i>",
+                    level=Level.objects.get_info(),
+                    source="torboxapi",
+                    torrent=torrent_search_result.torrent,
+                )
+        new_search_results.append(torrent_search_result)
+    TorrentTorBoxSearchResult.objects.bulk_create(new_search_results)
+    return torrent_search
 
 
 def get_active_torbox_downloads():
@@ -346,22 +378,29 @@ def add_torrent_by_magnet(magnet, torrent_type_id, api=None, skip_queue_add=Fals
 
     if not have_free_download_slot(api):
         if not skip_queue_add:
-            add_to_queue_by_magnet(magnet=magnet, torrent_type=torrent_type)
-        return None
-    return add_torrent_by_data(magnet=magnet, torrent_type=torrent_type, api=api)
+            return None, add_to_queue_by_magnet(
+                magnet=magnet, torrent_type=torrent_type
+            )
+        return None, None
+    return add_torrent_by_data(magnet=magnet, torrent_type=torrent_type, api=api), None
 
 
 def add_torrent_from_queue(queue: TorrentQueue, api=None):
     if not api:
         api = TorBoxApi()
 
-    return add_torrent_by_data(
+    torrent = add_torrent_by_data(
         magnet=queue.magnet,
         blob=queue.torrent_file,
         api=api,
         torrent_type=queue.torrent_type,
         private=queue.torrent_private,
     )
+    search = TorrentTorBoxSearchResult.objects.filter(queue=queue).first()
+    if search:
+        search.torrent = torrent
+        search.save()
+    return torrent
 
 
 def add_torrent(query_search_id):
@@ -371,19 +410,29 @@ def add_torrent(query_search_id):
         torrent_type = TorrentType.objects.get(name="Movie Series")
     else:
         torrent_type = TorrentType.objects.get(name="Movies")
-    torrent = add_torrent_by_magnet(result.magnet, torrent_type_id=torrent_type.id)
-    if not torrent:
-        return
-
-    logger.debug(f"Updating search result: {result} with matching torrent {torrent}")
-    result.torrent = torrent
-    result.save()
-    add_log(
-        message=f"Torrent {torrent_to_log(torrent)} with hash: <i>'{torrent.hash}'</i> was added from search result: <i>'{result.query}'</i>",
-        level=StatusMgr.get_instance().INFO,
-        source="torboxapi",
-        torrent=torrent,
+    torrent, queue = add_torrent_by_magnet(
+        result.magnet, torrent_type_id=torrent_type.id
     )
+
+    logger.debug(
+        f"Updating search result: {result} with matching torrent {torrent} or queue {queue}"
+    )
+    result.torrent = torrent
+    result.queue = queue
+    result.save()
+    if torrent:
+        add_log(
+            message=f"Torrent {torrent_to_log(torrent)} with hash: {format_log_value(torrent.hash)} was added from search result: {format_log_value(result.query)}",
+            level=Level.objects.get_info(),
+            source="torboxapi",
+            torrent=torrent,
+        )
+    if queue:
+        add_log(
+            message=f"Torrent was added to internal queue {queue.id} from search result: {format_log_value(result.query)}",
+            level=Level.objects.get_info(),
+            source="torboxapi",
+        )
 
 
 def request_dl(torrent_id, api=None, aria_api=None):
@@ -398,7 +447,7 @@ def request_dl(torrent_id, api=None, aria_api=None):
                 logger.error(f"Torrent have no internal id: {torrent}")
                 add_log(
                     message=f"Torrent have no internal id: {torrent_to_log(torrent)}",
-                    level=StatusMgr.get_instance().ERROR,
+                    level=Level.objects.get_error(),
                     source="torboxapi",
                     torrent=torrent,
                 )
@@ -410,7 +459,7 @@ def request_dl(torrent_id, api=None, aria_api=None):
             )
             add_log(
                 message=f"Can not find torrent to download: {torrent_id} for {TORBOX_CLIENT} and finished download",
-                level=StatusMgr.get_instance().WARNING,
+                level=Level.objects.get_warning(),
                 source="torboxapi",
             )
             return None
@@ -420,10 +469,10 @@ def request_dl(torrent_id, api=None, aria_api=None):
         for file in torrent_files:
             logger.debug(file)
             if not file.internal_id:
-                logger.error(f"Torrent file: {file} has no internal id, stoping")
+                logger.error(f"Torrent file: {file} has no internal id, stopping")
                 add_log(
                     message=f"Torrent file: {torrent_file_to_log(file)} has no internal id",
-                    level=StatusMgr.get_instance().ERROR,
+                    level=Level.objects.get_error(),
                     source="torboxapi",
                     torrent=torrent,
                 )
@@ -432,7 +481,7 @@ def request_dl(torrent_id, api=None, aria_api=None):
                 logger.info(f"Torrent file: {file} already has aria id")
                 add_log(
                     message=f"Torrent file: {torrent_file_to_log(file)} already has aria id",
-                    level=StatusMgr.get_instance().INFO,
+                    level=Level.objects.get_info(),
                     source="torboxapi",
                     torrent=torrent,
                 )
@@ -461,8 +510,13 @@ def request_dl(torrent_id, api=None, aria_api=None):
         result = api.request_download_link(torrent=torrent, file=file)
         logger.debug(result)
         if not result:
-            logger.error("Stopping requests for download links")
-            return
+            logger.warning(
+                f"Requesting link for torrent id: {torrent.id} failed, trying again"
+            )
+            result = api.request_download_link(torrent=torrent, file=file)
+            if not result:
+                status_mgr.remote_client_error(torrent)
+                return
         request_data.append(
             {
                 "url": result,
@@ -489,7 +543,7 @@ def request_dl(torrent_id, api=None, aria_api=None):
         file.save()
         add_log(
             message=f"Torrent file: {torrent_file_to_log(file)} for torrent: {torrent_to_log(torrent)} send to Aria for download with id: <i>'{aria_id}'</i> and path: <i>'{path}'</i>",
-            level=StatusMgr.get_instance().INFO,
+            level=Level.objects.get_info(),
             source="torboxapi",
             torrent=torrent,
         )
@@ -518,7 +572,7 @@ def change_torrent(torrent_id, action, api=None):
     logger.info(f"Torrent: {torrent_id} changed: {action}")
     add_log(
         message=f"Torrent: {torrent_to_log(torrent)} changed: {action}",
-        level=StatusMgr.get_instance().INFO,
+        level=Level.objects.get_info(),
         source="torboxapi",
         torrent=torrent,
     )
@@ -597,9 +651,10 @@ def update_torrent_list(api=None):
             torrent_history.save()
         else:
             logger.debug("Torrent wasn't active from last check")
-
-        if entry.files and not TorrentFile.objects.filter(torrent=torrent):
-            logger.debug(f"Updating files for: {torrent.name}")
+        download_requested = False
+        files = TorrentFile.objects.filter(torrent=torrent)
+        if entry.files and not files:
+            logger.debug(f"Filling files for: {torrent.name}")
             for file in entry.files:
                 logger.debug(file)
                 TorrentFile.objects.create(
@@ -614,6 +669,16 @@ def update_torrent_list(api=None):
 
             if torrent.download_finished:
                 status_mgr.remote_client_done(torrent)
+                download_requested = True
+        if (  # refactor to use same code as request_dl
+            torrent.download_finished
+            and not any([file.aria for file in files])
+            and not download_requested
+        ):
+            logger.warning(
+                f"Torrent {torrent.id} has no aria links but it's done on client site. It is possible, that client failed to respond with link. Will try again."
+            )
+            status_mgr.remote_client_done(torrent)
 
         not_deleted.append(torrent)
     mark_deleted_torrents(not_deleted, clients=[TRANSMISSION_CLIENT])

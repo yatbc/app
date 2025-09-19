@@ -4,10 +4,46 @@ from ..models import (
     TorrentType,
     TorrentHistory,
     TorrentStatus,
+    TorrentTorBoxSearch,
+    TorrentTorBoxSearchResult,
 )
 import shutil
 from pathlib import Path
 from ..torboxapi import TORBOX_CLIENT
+from django.utils import timezone
+
+
+def create_search(
+    query,
+    title,
+    season,
+    episode,
+    torrent=None,
+    query_object=None,
+    raw_title="empty",
+    queue=None,
+    hash="fake",
+) -> TorrentTorBoxSearchResult:
+    if query_object is None:
+        query_object = TorrentTorBoxSearch.objects.create(
+            query=query, date=timezone.now()
+        )
+    return TorrentTorBoxSearchResult.objects.create(
+        query=query_object,
+        hash=hash,
+        raw_title=raw_title,
+        title=title,
+        season=season,
+        episode=episode,
+        magnet="fake",
+        age="0",
+        cached=False,
+        last_known_seeders=1,
+        last_known_peers=1,
+        size=1,
+        torrent=torrent,
+        queue=queue,
+    )
 
 
 def create_work_dir(name=None):
@@ -43,19 +79,23 @@ def create_torrent_file(
     )
 
 
-def create_history(torrent: Torrent):
-    return TorrentHistory.objects.create(torrent=torrent, updated_at="2000-01-01 00:11")
+def create_history(torrent: Torrent, updated_at="2000-01-01 00:11"):
+    return TorrentHistory.objects.create(torrent=torrent, updated_at=updated_at)
 
 
 def create_torrent(
-    torrent_type, client=TORBOX_CLIENT, internal_id="123", local_download=True
+    torrent_type,
+    client=TORBOX_CLIENT,
+    internal_id="123",
+    local_download=True,
+    created_at="2000-01-01 00:11",
 ):
     return Torrent.objects.create(
         active=True,
         hash="HASH",
         name="FakeName",
         size=123,
-        created_at="2000-01-01 00:11",
+        created_at=created_at,
         download_finished=True,
         download_present=True,
         tracker="",
