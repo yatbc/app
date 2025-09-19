@@ -6,6 +6,7 @@ from ..models import (
     TorrentTorBoxSearch,
     TorrentHistory,
     TorrentTorBoxSearchResult,
+    TorrentQueue,
 )
 from ..torboxapi import (
     add_torrent_by_magnet,
@@ -21,8 +22,9 @@ from pathlib import Path
 from .temp_settings import console_logging_config
 import logging
 from django.utils import timezone
-from .utils import create_torrent, create_torrent_file
+from .utils import create_torrent, create_torrent_file, create_search
 from constance import config
+from datetime import timedelta
 
 
 @override_settings(DEBUG=True, LOGGING=console_logging_config)
@@ -182,6 +184,83 @@ class TorboxApiTests(TestCase):
         )
         query = TorrentTorBoxSearch.objects.get(query=query)
         TorrentTorBoxSearchResult.objects.get(query=query, hash=hash)
+
+    def test_search_with_old_entries(self):
+        api = unittest.mock.Mock()
+        hash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        api.search_torrent.return_value = json.loads(
+            """
+            {
+                "data": {
+                    "torrents": [
+                        {
+                            "hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                            "raw_title": "Free.Movie",
+                            "title": "Free Movie",
+                            "title_parsed_data": {
+                                "resolution": "2160p",
+                                "quality": "Blu-ray",
+                                "year": 1234,
+                                "codec": "H.265",
+                                "audio": "DD Mm 234",
+                                "remux": true,
+                                "title": "Free Movie",
+                                "excess": [
+                                    
+                                ],
+                                "encoder": "Free"
+                            },
+                            "magnet": "magnet:?xt=urn:btih:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&dn=Free.Movie",
+                            "torrent": null,
+                            "last_known_seeders": 123,
+                            "last_known_peers": 342,
+                            "size": 123123123,
+                            "tracker": "free",
+                            "categories": [
+                            ],
+                            "files": 0,
+                            "type": "torrent",
+                            "nzb": null,
+                            "age": "123d",
+                            "user_search": false,
+                            "cached": true,
+                            "owned": false
+                        }
+                    ]
+                }
+            }
+            """
+        )
+        query = "fake_query"
+        season = 1
+        episode = 1
+        query_object = TorrentTorBoxSearch.objects.create(
+            query=query,
+            season=season,
+            episode=episode,
+            date=timezone.now() - timedelta(days=1),
+        )
+        old = create_search(
+            query=query,
+            season=season,
+            episode=episode,
+            queue=TorrentQueue.objects.create(
+                torrent_type=TorrentType.objects.get_no_type()
+            ),
+            query_object=query_object,
+            title="Free.Movie",
+            hash=hash,
+        )
+
+        search_torrent(query=query, season=season, episode=episode, api=api)
+
+        api.search_torrent.assert_called_once_with(
+            query, season=season, episode=episode
+        )
+        query = TorrentTorBoxSearch.objects.get(query=query)
+        self.assertEqual(query, query_object)
+        new = TorrentTorBoxSearchResult.objects.get(query=query, hash=hash)
+        self.assertEqual(old, new)
 
 
 if __name__ == "__main__":

@@ -69,8 +69,6 @@ function getData() {
         init() {
             this.setupSSE(
                 (update_action = () => {
-                    console.log("Does it work????")
-                    console.log(this.taskId);
                     if (this.taskId) {
                         this.checkTaskStatus(this.taskId, this.fetchData.bind(this));
                     } else {

@@ -1,9 +1,16 @@
-from .models import Torrent, TorrentFile, TorrentType, TorrentTorBoxSearchResult
+from .models import Torrent, TorrentFile, TorrentType, TorrentTorBoxSearchResult, Level
 from .statusmgr import StatusMgr
 import logging
 import abc
 import shutil
-from .commondao import torrent_file_to_log, format_log_value, add_log, torrent_to_log
+import re
+from .commondao import (
+    torrent_file_to_log,
+    format_log_value,
+    add_log,
+    torrent_to_log,
+    prepare_torrent_dir_name,
+)
 from pathlib import Path
 from django.db.models import Q
 from constance import config
@@ -23,6 +30,16 @@ class ActionHandler:
         if self.handler:
             self.handler.handle(action)
 
+    def _handle_type(
+        self,
+        torrent_type: TorrentType,
+        handler,
+        action,
+    ):
+        if action.torrent_type == torrent_type:
+            return handler(action)
+        return True
+
 
 class NothingActionHandler(ActionHandler):
     def handle(self, action):
@@ -32,13 +49,15 @@ class NothingActionHandler(ActionHandler):
 class Action:
     def __init__(
         self,
-        file: TorrentFile,
+        torrent: Torrent,
+        files: list[TorrentFile],
         torrent_dir: str,
         exit_handler: ActionHandler,
         enter_handler: ActionHandler,
     ):
-        self.file = file
-        self.torrent_type = file.torrent.torrent_type
+        self.files = files
+        self.torrent = torrent
+        self.torrent_type = torrent.torrent_type
         self.torrent_dir = torrent_dir
         self.status_mgr = StatusMgr.get_instance()
         self.logger = logging.getLogger("torbox")
@@ -56,8 +75,8 @@ class Action:
     def __exit__(self, exc_type, exc_value, traceback):
         if exc_type:
             self.status_mgr.action_error(
-                self.file.torrent,
-                message=f"Error in execution action on done on file {format_log_value(self.source_path)},<br/> to {format_log_value(self.target_path)}: {format_log_value(exc_value)}",
+                self.torrent,
+                message=f"Error in execution action,<br/> {format_log_value(exc_value)}",
             )
             return False
         self.exit_handler.handle(self)
@@ -68,8 +87,9 @@ class ExitHandler(ActionHandler):
         super().__init__()
 
     def handle(self, action: Action):
-        action.file.action_on_finish_done = True
-        action.file.save()
+        for file in action.files:
+            file.action_on_finish_done = True
+            file.save()
 
 
 def get_stash_api():
@@ -84,31 +104,34 @@ class StashRescanExitHandler(ActionHandler):
 
         self.stash = get_stash_api()
 
-    def handle(self, action: Action):
-
-        if (
-            config.RESCAN_STASH_ON_HOME_VIDEO
-            and action.torrent_type == TorrentType.objects.get_home_video()
-        ):
-
+    def _rescan_if_needed(self, action: Action):
+        if config.RESCAN_STASH_ON_HOME_VIDEO:
             folder = action.target_dir.name
             if self.stash.rescan_stash(folder):
                 add_log(
                     message=f"Stash rescan for folder: {format_log_value(folder)} started",
-                    level=action.status_mgr.INFO,
+                    level=Level.objects.get_info(),
                     source="action",
-                    torrent=action.file.torrent,
+                    torrent=action.torrent,
                 )
             else:
                 add_log(
                     message=f"Could not start Stash rescan for folder: {format_log_value(folder)}",
-                    level=action.status_mgr.ERROR,
+                    level=Level.objects.get_error(),
                     source="action",
-                    torrent=action.file.torrent,
+                    torrent=action.torrent,
                 )
-        else:
+            return True
+        return False
+
+    def handle(self, action: Action):
+        if not self._handle_type(
+            TorrentType.objects.get_home_video(),
+            self._rescan_if_needed,
+            action,
+        ):
             self.logger.info(
-                "Skipping Stash rescan, because Stash settings are not set"
+                "Skipping Stash rescan, because Stash settings are not set or torrent type is not Home Video"
             )
         if self.handler:
             self.handler.handle(action)
@@ -118,9 +141,10 @@ class ActionNothing(Action):
 
     def exec(self):
         message = (
-            f"File: {torrent_file_to_log(self.file)} has type: <i>'{self.torrent_type.name}'</i> which is marked with action: <i>'{self.torrent_type.action_on_finish}'</i>, skipping",
+            f"Torrent: {torrent_to_log(self.torrent)} has type: <i>'{self.torrent_type.name}'</i> which is marked with action: <i>'{self.torrent_type.action_on_finish}'</i>, skipping",
         )
-        self.status_mgr.action_progress(self.file.torrent, message)
+
+        self.status_mgr.action_progress(self.torrent, message)
         return True
 
 
@@ -141,70 +165,89 @@ class CopyEnterHandler(ActionHandler):
 class ActionCopy(Action):
     def __init__(
         self,
-        file: TorrentFile,
-        torrent_dir,
+        torrent: Torrent,
+        files: list[TorrentFile],
+        torrent_dir: str,
         enter_handler: ActionHandler,
         exit_handler: ActionHandler,
     ):
         super().__init__(
-            file, torrent_dir, exit_handler=exit_handler, enter_handler=enter_handler
+            torrent,
+            files,
+            torrent_dir,
+            exit_handler=exit_handler,
+            enter_handler=enter_handler,
         )
-        torrent_type = file.torrent.torrent_type
-        self.source_path = Path(file.aria.path)
-        file_name = self.source_path.name
+        torrent_type = torrent.torrent_type
         self.target_dir = Path(torrent_type.target_dir) / torrent_dir
-        self.target_path = self.target_dir / file_name
+        self.paths = []
+        for file in files:
+            source_path, target_path = self.build_paths(file)
+            self.paths.append((source_path, target_path, file))
+
         self.enter_handler = enter_handler
         self.exit_handler = exit_handler
 
-    def exec_target_exists(self):
+    def build_paths(self, file: TorrentFile):
+        source_path = Path(file.aria.path)
+        target_path = self.target_dir / source_path.name
+        return source_path, target_path
+
+    def exec_target_exists(self, source_path: Path, target_path: Path):
         add_log(
-            message=f"Target file already exists: <i>'{self.target_path}'</i>, skipping action execution for torrent: {torrent_to_log(self.file.torrent)}, and marking action on finish as done",
-            level=self.status_mgr.WARNING,
+            message=f"Target file already exists: <i>'{target_path}'</i>, skipping action execution for this file",
+            level=Level.objects.get_warning(),
             source="action",
-            torrent=self.file.torrent,
+            torrent=self.torrent,
         )
 
     def exec(self):
-        if self.target_path.exists():
-            self.exec_target_exists()
-            return True
+        for source, target, file in self.paths:
+            if target.exists():
+                self.exec_target_exists(source, target)
+                continue
 
-        message_start = f"Copy action for file: {torrent_file_to_log(self.file)} started: source: {format_log_value(self.source_path)},<br/> target: {format_log_value(self.target_path)}"
-        message_stop = f"Copy action for file done: {torrent_file_to_log(self.file)}, source: {format_log_value(self.source_path)},<br/> target: {format_log_value(self.target_path)}"
-        self.status_mgr.action_progress(self.file.torrent, message=message_start)
+            message_start = f"Copy action for file: {torrent_file_to_log(file)} started: source: {format_log_value(source)},<br/> target: {format_log_value(target)}"
+            message_stop = f"Copy action for file done: {torrent_file_to_log(file)}, source: {format_log_value(source)},<br/> target: {format_log_value(target)}"
+            self.status_mgr.action_progress(self.torrent, message=message_start)
 
-        shutil.copy(self.source_path, self.target_path)
-
-        self.status_mgr.action_progress(self.file.torrent, message=message_stop)
+            shutil.copy(source, target)
+            self.status_mgr.action_progress(self.torrent, message=message_stop)
 
 
 class ActionMove(ActionCopy):
-    def __init__(self, file, torrent_dir, enter_handler, exit_handler):
-        super().__init__(file, torrent_dir, enter_handler, exit_handler)
+    def __init__(
+        self,
+        torrent: Torrent,
+        files: list[TorrentFile],
+        torrent_dir,
+        enter_handler,
+        exit_handler,
+    ):
+        super().__init__(torrent, files, torrent_dir, enter_handler, exit_handler)
 
-    def exec_target_exists(self):
-        super().exec_target_exists()
-        self.source_path.unlink(missing_ok=True)
+    def exec_target_exists(self, source: Path, target: Path):
+        super().exec_target_exists(source, target)
+        source.unlink(missing_ok=True)
         add_log(
-            message=f"Source file <i>'{self.source_path}'</i> removed after move action, because target file already exists: <i>'{self.target_path}'</i> for torrent: {torrent_to_log(self.file.torrent)}",
-            level=self.status_mgr.WARNING,
+            message=f"Source file {format_log_value(source)} removed after move action, because target file already exists: {format_log_value(target)} for torrent: {torrent_to_log(self.torrent)}",
+            level=Level.objects.get_warning(),
             source="action",
-            torrent=self.file.torrent,
+            torrent=self.torrent,
         )
 
     def exec(self):
-        if self.target_path.exists():
-            self.exec_target_exists()
-            return True
+        for source, target, file in self.paths:
+            if target.exists():
+                self.exec_target_exists(source, target)
+                continue
 
-        message_start = f"Move action for file: {torrent_file_to_log(self.file)} started: source: {format_log_value(self.source_path)},<br/> target: {format_log_value(self.target_path)}"
-        message_stop = f"Move action for file done: {torrent_file_to_log(self.file)}, source: {format_log_value(self.source_path)},<br/> target: {format_log_value(self.target_path)}"
-        self.status_mgr.action_progress(self.file.torrent, message=message_start)
+            message_start = f"Move action for file: {torrent_file_to_log(file)} started: source: {format_log_value(source)},<br/> target: {format_log_value(target)}"
+            message_stop = f"Move action for file done: {torrent_file_to_log(file)}, source: {format_log_value(source)},<br/> target: {format_log_value(target)}"
+            self.status_mgr.action_progress(self.torrent, message=message_start)
 
-        shutil.move(self.source_path, self.target_path)
-
-        self.status_mgr.action_progress(self.file.torrent, message=message_stop)
+            shutil.move(source, target)
+            self.status_mgr.action_progress(self.torrent, message=message_stop)
 
 
 def clean_title(title: str):
@@ -213,6 +256,8 @@ def clean_title(title: str):
         .replace("\\", "")
         .replace("_", " ")
         .replace(".", " ")
+        .replace(":", " ")
+        .replace("  ", " ")
         .replace("  ", " ")
         .strip()
     )
@@ -221,18 +266,23 @@ def clean_title(title: str):
 def get_metadata_by_file(file_name: str, title=None, season=None, episode=None):
     import re
 
-    result = re.search(r"[s](eason)*(\d+)", file_name.lower())
+    name = Path(file_name).stem
+    result = re.search(r"s(eason){0,1}\s*(\d+)\s*e(pisode)*\s*(\d+)", name.lower())
     if result and title is None:
-        title = file_name[0 : result.start()]
-        title = title.strip()
+        print(result.group())
+        title = name[0 : result.start()]
+        title = clean_title(title.strip())
     if result and season is None:
         season = int(result.group(2))
-        # only care about episode if there is a season
-        result = re.search(r"e(\d+)", file_name.lower())
-        if result and episode is None:
-            episode = int(result.group(1))
+    if result and episode is None:
+        episode = int(result.group(4))
+
     if title is None:
-        title = Path(file_name).stem
+        title = clean_title(Path(file_name).stem)
+    logger = logging.getLogger("torbox")
+    logger.debug(
+        f"Extracted metadata from file: {file_name}, title: {title}, season: {season}, episode: {episode}"
+    )
     return title, season, episode
 
 
@@ -244,9 +294,7 @@ def get_metadata_by_search(
 
     query = torbox_search.query
     result = query.query.split("/")
-    episode = None
     imdbid = result[0]
-    season = None
     if len(result) > 1 and season is None:
         season = int(result[1].lower().replace("s", ""))
         if len(result) > 2 and episode is None:
@@ -255,9 +303,17 @@ def get_metadata_by_search(
     if torbox_search.season and season is None:
         season = int(torbox_search.season)
 
-    if torbox_search.episode and episode is None:
+    if (
+        torbox_search.episode
+        and episode is None
+        and len(torbox_search.episode.split(",")) == 1  # it can contain "1,2,3,4"
+    ):
         episode = int(torbox_search.episode)
-
+    logger = logging.getLogger("torbox")
+    title = torbox_search.title
+    logger.debug(
+        f"Extracted metadata from search, title: {title}, season: {season}, episode: {episode}"
+    )
     return torbox_search.title, season, episode, imdbid
 
 
@@ -292,20 +348,22 @@ def build_target_dir(target_dir: Path, season=None):
 def find_existing_dir(
     target_dir: Path, title: str, file_name: str, season=None, episode=None, imdbid=None
 ):
-    title_words = title.split(" ")
+    title = re.compile(r"\b" + title.lower() + r"\b")
+    IMDBID = "imdbid-"
+    if imdbid:
+        imdbid = re.compile(r"\b" + imdbid + r"\b")
     for entry in target_dir.iterdir():
         if not entry.is_dir():
             continue
-        if imdbid and imdbid in entry.name:
+
+        if imdbid and imdbid.search(entry.name):
             return build_target_dir(entry, season)
 
+        if IMDBID in entry.name and imdbid:  # has id, but it's different then given
+            continue
+
         title_folder = clean_title(entry.name).lower()
-        present = True
-        for word in title_words:
-            if word.lower().strip() not in title_folder:
-                present = False
-                break
-        if present:
+        if title.search(title_folder):
             return build_target_dir(entry, season)
     return None
 
@@ -343,22 +401,27 @@ def is_known_movie_type(file: TorrentFile):
     return False
 
 
+def find_movie(files: list[TorrentFile]):
+    for file in files:
+        if is_known_movie_type(file):
+            return file
+    return None
+
+
 class MoviesEnterHandler(ActionHandler):
     def __init__(self):
         super().__init__()
         self.movies_type = TorrentType.objects.get_movies()
 
-    def _prepare_folders(self, action: Action):
+    def _prepare_folders(self, file: TorrentFile, action: Action):
         import re
 
-        file_name = action.file.name
+        file_name = file.name
         torbox_search = TorrentTorBoxSearchResult.objects.filter_by_torrent(
-            action.file.torrent
+            action.torrent
         ).first()
         if not torbox_search:
-            self.logger.debug(
-                f"Torrent: {action.file.torrent} is not connected to search"
-            )
+            self.logger.debug(f"Torrent: {action.torrent} is not connected to search")
         title, _, _ = get_metadata_by_file(file_name=file_name)
         title, _, _, imdbid = get_metadata_by_search(torbox_search, title, None, None)
 
@@ -375,52 +438,81 @@ class MoviesEnterHandler(ActionHandler):
         normalized_file_name = normalize_moves_file_name(file_name, title)
         if existing_dir:
             add_log(
-                f"Folder with movie from torrent: {torrent_to_log(action.file.torrent)} already existed, skipping",
-                level=action.status_mgr.INFO,
+                f"Folder with movie from torrent: {torrent_to_log(action.torrent)} already existed, skipping organization. Existing dir: {format_log_value(existing_dir)}",
+                level=Level.objects.get_info(),
                 source="actionmgr",
-                torrent=action.file.torrent,
+                torrent=action.torrent,
             )
-            return
+            action.target_dir = existing_dir
+            return normalized_file_name
         if title:
+            source, old_target = action.build_paths(file)
             target_dir = Path(action.torrent_type.target_dir)
             if imdbid:
                 title = title.title() + f" [imdbid-{imdbid}]"
             target_dir = target_dir / title
             target_path = target_dir / normalized_file_name
             add_log(
-                f"Updating target path for movie. From: {format_log_value(action.target_path)}<br/> to new dir: {format_log_value(target_path)}",
-                level=action.status_mgr.INFO,
+                f"Updating target path for movie. From: {format_log_value(old_target)}<br/> to new dir: {format_log_value(target_path)}",
+                level=Level.objects.get_info(),
                 source="actionmgr",
-                torrent=action.file.torrent,
+                torrent=action.torrent,
             )
             action.target_dir = target_dir
-            action.target_path = target_path
-            return
+            return normalized_file_name
         add_log(
             message=f"Could not find/build target folder for movie: title: {format_log_value(title)}, file_name: {format_log_value(file_name)}, imdbid: {format_log_value(imdbid)}",
-            level=action.status_mgr.WARNING,
+            level=Level.objects.get_warning(),
             source="actionmgr",
             torrent=action.file.torrent,
         )
+        return None
+
+    def _organize(self, action: Action):
+        if config.ORGANIZE_MOVIES == True:
+            self.logger.info("Handling action for movies")
+            movie = find_movie(action.files)
+            if not movie:
+                add_log(
+                    message=f"Could not find movie file in torrent: {torrent_to_log(action.torrent)}, skipping organization",
+                    level=Level.objects.get_warning(),
+                    source="actionmgr",
+                    torrent=action.torrent,
+                )
+                return True
+
+            action.paths = []  # reset paths, because target_dir could have changed
+
+            file_name = self._prepare_folders(
+                movie, action
+            )  # generate target_dir from movie file
+            for (
+                file
+            ) in (
+                action.files
+            ):  # fill paths again, because target_dir could have changed
+                source_path, target_path = action.build_paths(file)
+                if file == movie:
+                    action.paths.append(
+                        (source_path, action.target_dir / file_name, file)
+                    )
+                    continue
+                if is_known_movie_type(file):
+                    new_name = self._prepare_folders(file, action)
+                    action.paths.append(
+                        (source_path, action.target_dir / new_name, file)
+                    )
+                    continue
+                action.paths.append((source_path, target_path, file))
+
+            return True
+        return False
 
     def handle(self, action: Action):
-        if action.torrent_type == self.movies_type:
-            if config.ORGANIZE_MOVIES == True:
-                self.logger.info("Handling action for movies")
-                if is_known_movie_type(action.file):
-                    self._prepare_folders(action)
-                else:
-                    add_log(
-                        message=f"File: {torrent_file_to_log(action.file)} is not known as movie type, skipping organization",
-                        level=action.status_mgr.WARNING,
-                        source="actionmgr",
-                        torrent=action.file.torrent,
-                    )
-
-            else:
-                self.logger.info(
-                    "Skipping movies organization action, it is disabled in settings"
-                )
+        if not self._handle_type(self.movies_type, self._organize, action):
+            self.logger.info(
+                "Skipping movies organization action, it is disabled in settings"
+            )
 
         if self.handler:
             self.handler.handle(action)
@@ -431,17 +523,15 @@ class MoveSeriesEnterHandler(ActionHandler):
         super().__init__()
         self.movie_series_type = TorrentType.objects.get_movie_series()
 
-    def _prepare_folders(self, action: Action):
+    def _prepare_folders(self, file: TorrentFile, action: Action):
         import re
 
-        file_name = action.file.name
+        file_name = file.name
         torbox_search = TorrentTorBoxSearchResult.objects.filter_by_torrent(
-            action.file.torrent
+            action.torrent
         ).first()
         if not torbox_search:
-            self.logger.debug(
-                f"Torrent: {action.file.torrent} is not connected to search"
-            )
+            self.logger.debug(f"Torrent: {action.torrent} is not connected to search")
         title, season, episode = get_metadata_by_file(file_name=file_name)
         title, season, episode, imdbid = get_metadata_by_search(
             torbox_search, title, season, episode
@@ -463,14 +553,14 @@ class MoveSeriesEnterHandler(ActionHandler):
         if existing_dir:
             target_path = existing_dir / normalized_file_name
             add_log(
-                f"Updating target path for movie series. From: {format_log_value(action.target_path)}<br/> to existing dir: {format_log_value(target_path)}",
-                level=action.status_mgr.INFO,
+                f"Updating target path for movie series to existing dir:<br/> {format_log_value(target_path)}",
+                level=Level.objects.get_info(),
                 source="actionmgr",
-                torrent=action.file.torrent,
+                torrent=action.torrent,
             )
             action.target_dir = existing_dir
-            action.target_path = existing_dir / normalized_file_name
-            return
+
+            return normalized_file_name
         if title and season:
             target_dir = Path(action.torrent_type.target_dir)
             if imdbid:
@@ -478,38 +568,64 @@ class MoveSeriesEnterHandler(ActionHandler):
             target_dir = target_dir / title / f"season {season:02}"
             target_path = target_dir / normalized_file_name
             add_log(
-                f"Updating target path for movie series. From: {format_log_value(action.target_path)}<br/> to new dir: {format_log_value(target_path)}",
-                level=action.status_mgr.INFO,
+                f"Updating target path for movie series to new dir:<br/> {format_log_value(target_path)}",
+                level=Level.objects.get_info(),
                 source="actionmgr",
-                torrent=action.file.torrent,
+                torrent=action.torrent,
             )
             action.target_dir = target_dir
-            action.target_path = target_path
-            return
+            return normalized_file_name
         add_log(
             message=f"Could not find/build target folder for movie series: title: {format_log_value(title)}, file_name: {format_log_value(file_name)}, season: {format_log_value(season)}, episode: {format_log_value(episode)}, imdbid: {format_log_value(imdbid)}",
-            level=action.status_mgr.WARNING,
+            level=Level.objects.warning(),
             source="actionmgr",
-            torrent=action.file.torrent,
+            torrent=action.torrent,
         )
+        return None
+
+    def _organize(self, action: Action):
+        if config.ORGANIZE_MOVIE_SERIES == True:
+            self.logger.info("Handling action for movie series")
+            movie = find_movie(action.files)
+            if not movie:
+                add_log(
+                    message=f"Could not find movie file in torrent: {torrent_to_log(action.torrent)}, skipping organization",
+                    level=Level.objects.get_warning(),
+                    source="actionmgr",
+                    torrent=action.torrent,
+                )
+                return True
+            action.paths = []  # reset paths, because target_dir could have changed
+            file_name = self._prepare_folders(
+                movie, action
+            )  # generate target_dir from movie file
+            for (
+                file
+            ) in (
+                action.files
+            ):  # fill paths again, because target_dir could have changed
+                source_path, target_path = action.build_paths(file)
+                if file == movie:
+                    action.paths.append(
+                        (source_path, action.target_dir / file_name, file)
+                    )
+                    continue
+                if is_known_movie_type(file):
+                    new_name = self._prepare_folders(file, action)
+                    action.paths.append(
+                        (source_path, action.target_dir / new_name, file)
+                    )
+                    continue
+                action.paths.append((source_path, target_path, file))
+
+            return True
+        return False
 
     def handle(self, action: Action):
-        if action.torrent_type == self.movie_series_type:
-            if config.ORGANIZE_MOVIE_SERIES == True:
-                self.logger.info("Handling action for movie series")
-                if is_known_movie_type(action.file):
-                    self._prepare_folders(action)
-                else:
-                    add_log(
-                        message=f"File: {torrent_file_to_log(action.file)} is not known as movie type, skipping organization",
-                        level=action.status_mgr.WARNING,
-                        source="actionmgr",
-                        torrent=action.file.torrent,
-                    )
-            else:
-                self.logger.info(
-                    "Skipping movie series organization action, it is disabled in settings"
-                )
+        if not self._handle_type(self.movie_series_type, self._organize, action):
+            self.logger.info(
+                "Skipping movie series organization action, it is disabled in settings"
+            )
 
         if self.handler:
             self.handler.handle(action)
@@ -519,18 +635,21 @@ class ActionFactory:
     def __init__(self):
         self.logger = logging.getLogger("torbox")
 
-    def create_action(self, file: TorrentFile, torrent_dir: str) -> Action:
+    def create_action(
+        self, torrent: Torrent, torrent_dir: str, files: list[TorrentFile]
+    ) -> Action:
         enter_handler = CopyEnterHandler()
         enter_handler = MoviesEnterHandler().set_next(
             MoveSeriesEnterHandler().set_next(enter_handler)
         )
         exit_handler = StashRescanExitHandler().set_next(ExitHandler())
-        torrent_type = file.torrent.torrent_type
+        torrent_type = torrent.torrent_type
         if torrent_type.action_on_finish == TorrentType.ACTION_DO_NOTHING:
             self.logger.debug("Creating action for nothing")
             enter_handler = NothingActionHandler()
             return ActionNothing(
-                file=file,
+                torrent=torrent,
+                files=files,
                 torrent_dir=torrent_dir,
                 enter_handler=enter_handler,
                 exit_handler=exit_handler,
@@ -538,7 +657,8 @@ class ActionFactory:
         if torrent_type.action_on_finish == TorrentType.ACTION_COPY:
             self.logger.debug("Creating action for copy")
             return ActionCopy(
-                file=file,
+                torrent=torrent,
+                files=files,
                 torrent_dir=torrent_dir,
                 enter_handler=enter_handler,
                 exit_handler=exit_handler,
@@ -546,7 +666,8 @@ class ActionFactory:
         if torrent_type.action_on_finish == TorrentType.ACTION_MOVE:
             self.logger.debug("Creating action for move")
             return ActionMove(
-                file=file,
+                torrent=torrent,
+                files=files,
                 torrent_dir=torrent_dir,
                 enter_handler=enter_handler,
                 exit_handler=exit_handler,
@@ -574,9 +695,13 @@ class ActionMgr:
             or not file.torrent
             or not file.torrent.torrent_type
         ):
-            self.logger.warning(
-                f"File: {file} is not done or action on finish already executed, skipping action execution"
+            add_log(
+                message=f"File: {torrent_file_to_log(file)} is not done, skipping action execution for torrent: {torrent_to_log(file.torrent)}",
+                level=Level.objects.get_warning(),
+                source="actionmgr",
+                torrent=file.torrent,
             )
+
             return False
 
         if not source_path.exists():
@@ -584,15 +709,39 @@ class ActionMgr:
                 file.torrent,
                 message=f"Source file does not exist: {format_log_value(source_path)}",
             )
+            add_log(
+                message=f"File: {torrent_file_to_log(file)} does not exist at path: {format_log_value(source_path)}, skipping action execution for torrent: {torrent_to_log(file.torrent)}",
+                level=Level.objects.get_error(),
+                source="actionmgr",
+                torrent=file.torrent,
+            )
             return False
         return True
 
-    def run(self, file: TorrentFile, torrent_dir: str):
-        # torrent_dir is part of target path: target dir from torrent_type/torrent_dir
-        source_path = Path(file.aria.path)
-        if not self._is_valid(file, source_path):
-            return
-        with self.action_factory.create_action(
-            file=file, torrent_dir=torrent_dir
-        ) as action:
-            action.exec()
+    def run(self, torrent: Torrent):
+        actions = TorrentFile.objects.filter(
+            torrent=torrent, action_on_finish_done=False, aria__done=True
+        )
+        self.status_mgr.action_start(
+            torrent=torrent,
+            message=f"Executing actions on finish for torrent: {torrent_to_log(torrent)}, actions to finish: {len(actions)}",
+        )
+        torrent_dir_name = prepare_torrent_dir_name(
+            torrent.name
+        )  # dir, where all torrent files will be stored in target dir(target dir is based on torrent_type)
+        all_done = True
+        files = []
+        for file in actions:
+            source_path = Path(file.aria.path)
+            if not self._is_valid(file, source_path):
+                all_done = False
+                continue
+            files.append(file)
+        if files:
+            with self.action_factory.create_action(
+                torrent=torrent, torrent_dir=torrent_dir_name, files=files
+            ) as action:
+                action.exec()
+
+        if all_done:
+            self.status_mgr.torrent_done(torrent=torrent)

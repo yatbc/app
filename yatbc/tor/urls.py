@@ -137,6 +137,20 @@ urlpatterns = [
         views.get_history,
         name="get_history_pagination",
     ),
+    path(
+        "api/get_arr/<int:current>/<int:limit>",
+        views.get_arr,
+        name="get_arr_pagination",
+    ),
+    path("api/retry_arr/<int:arr_id>", views.retry_arr, name="retry_arr"),
+    path("api/get_arr/<int:arr_id>", views.get_arr, name="get_arr"),
+    path("api/save_arr", views.save_arr, name="save_arr"),
+    path("api/remove_arr/<int:arr_id>", views.remove_arr, name="remove_arr"),
+    path(
+        "api/change_arr_activity/<int:arr_id>",
+        views.change_arr_activity,
+        name="change_arr_activity",
+    ),
     path("api/get_history", views.get_history, name="get_history"),
     path("api/add_referral", views.add_referral, name="add_referral"),
     path(
@@ -155,4 +169,5 @@ urlpatterns = [
         name="get_torrent_seeders",
     ),
     path("api/get_torrent_log/<int:id>", views.get_torrent_log, name="get_torrent_log"),
+    path("arr", views.arr, name="arr"),
 ]

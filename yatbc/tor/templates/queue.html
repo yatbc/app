@@ -19,7 +19,7 @@
             <thead>
                 <tr>
                     <th scope="col" style="width: 300px;">Added at</th>
-                    <th scope="col" style="width: 100px;">Priority</th>
+                    <th scope="col" class="d-none d-lg-table-cell" style="width: 100px;">Priority</th>
                     <th scope="col" style="width: 300px;">Torrent type</th>
                     <th scope="col">Magnet/Torrent</th>
                     <th scope="col" style="width: 100px;">Actions</th>
@@ -31,7 +31,7 @@
                     <template x-for="entry in queue" :key="index">
                         <tr>
                             <td x-text="entry.added_at" class="text-break"></td>
-                            <td x-text="entry.priority"></td>
+                            <td class="d-none d-lg-table-cell" x-text="entry.priority"></td>
                             <td>
                                 <select class="form-select" x-model="entry.torrent_type_id"
                                     @change="handleSelection(entry.id, $event.target.value)">

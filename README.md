@@ -16,20 +16,35 @@ _Disclaimer: This application was developed for educational purposes only and is
 ## How this app works?
 *TLDR*: YATBC automates workflow of using TorBox, downloading files to local drive and moving/coping them when done
 1. You can configure the target folders for media types
-2. You can add magnet links or search using TorBox's search(useful if you intend to download something that is already in TorBox cache)
+2. You can add magnet links, search using TorBox's search(useful if you intend to download something that is already in TorBox cache) or use simple Movie Series Monitoring to fill media libraries with content.
 3. When download is ready on TorBox, the YATBC will download it using Aria2c
-4. When Aria2c will finish downloading, YATBC will copy downloaded file to configured target folder based on media type
+4. When Aria2c will finish downloading, YATBC will copy downloaded file to configured target folder based on media type.
 5. YATBC will inform you about every important action via easy(hopefully) accessible logs related to files
 
 ## Integrations
 All Integrations can be enabled/disabled in configuration.
-1. Media libraries integration (like Jellyfin). Integration works for torrents marked as Movie Series or Movie type. When file will finish downloading to local storage, the app will adjust it name to {title} {SNumber}{ENumber}. If the file was added via TorBox's search api, it will also contain the id in the name.  
+1. Media libraries integration (like Jellyfin). Integration works for torrents marked as Movie Series or Movie type. When file will finish downloading to local storage, the app will adjust it's name to {title} {SNumber}{ENumber}. If the file was added via TorBox's search api, it will also contain the id in the folders name.  
 2. Stash integration. Integration works for torrents marked as Home Video. When file will finish downloading to local storage, the app will call Stash's graphql api to scan new folder.
+3. Auto-cleaning download slots. If Download Queue will contain entries and this integration is enabled, when queue will be processed some active downloads(finished more then 1h ago, cached) may be automatically removed. 
+
+## Arr
+Supports Movie Series monitoring based on build-in TorBox search api.
+Monitoring is done by: Quality, Encoder, Include words, Exclude words, presence in cache.
+
+## Internal Queue
+YATBC has internal queue, if you want to add large number of files, but have no free slots, YATBC will store them in internal queue.
+*Queue folders will be created on first entry to queue. So if you don't see the right folder structure then wait ~10 minutes or enter Queue page.*
+1. YATBC monitors folders for new torrent files in: `/data/persistent/queue/[torrent_type]/[private|public]/*`. Example: you want to add torrent files to Other type from public tracker, then path on docker will be: `/data/persistent/queue/other/public`
+2. *Torrent files added to queue will be removed*
+3. YATBC takes files from queue:
+   - When user manually deletes one of active downloads(Sends them to History)
+   - Every 10 minutes (by default) and Active cleaning is active ("config/Queue") and will find some downloads to clean(Check configuration page for details)
+
 
 ## Some screen shots:
-<div style="display: flex; flex-wrap: wrap;">
-  <img src="docs/images/yatbc-start.jpg" width="1200" style="padding: 5px;">
+<div style="display: flex; flex-wrap: wrap;">  
   <img src="docs/images/add.jpg" width="1200" style="padding: 5px;">
+  <img src="docs/images/arr.jpg" width="1200" style="padding: 5px;">
   <img src="docs/images/queue.jpg" width="1200" style="padding: 5px;">
   <img src="docs/images/download.jpg" width="1200" style="padding: 5px;">
   <img src="docs/images/history.jpg" width="1200" style="padding: 5px;">
@@ -73,7 +88,7 @@ All Integrations can be enabled/disabled in configuration.
 
 ## FAQ:
 1. Do I have to configure all volumes? Like `home_data`, `other_data`?
-   - You can configure just the ones that you will use (minimum is `aria_data` and `persistent_data`).
+   - You can configure just the ones that you will use (minimum is `aria_data` and `persistent_data`), but the app will be more functional with all folders configured.
 
 2. I see in the logs: `Could not get torrents: HTTPSConnectionPool(host='api.torbox.app', port=443): Max retries exceeded with url: /v1/api/torrents/mylist`
    - Have you recently (re)started docker? If so, wait a moment for DNS to go up and it should work as expected.
@@ -91,7 +106,7 @@ All Integrations can be enabled/disabled in configuration.
    - Sure, remember to configure it in the Config/Aria.
 
 7. When I add more torrents than my TorBox account has download slots, I don't see the extra files in TorBox Queue.
-   - YATBC will add them to internal queue. If there will be free download slot(at the moment you will have to manually remove torrents), YATBC will fill them from internal queue. Queue by default is processed every 10 minutes or on torrent removal.
+   - YATBC will add them to internal queue. If there will be free download slot(you can enable auto cleaning in config), YATBC will fill them from internal queue. Queue by default is processed every 10 minutes or on torrent removal.
 
 8. What the Download Statuses mean(column Status in Status page)?
    - `Unknown` - File is in unknown state
@@ -108,3 +123,6 @@ All Integrations can be enabled/disabled in configuration.
    - `Finish: Progress` - Action on finish is working
    - `Finish: Done` - Action on finish is done
    - `Finish: Error` - There was an error with action on finish, and user intervention will be required
+
+9. Where can I find manual for Movie Series monitoring?
+   - In Arr tab, press Help button. There should be up to date manual.

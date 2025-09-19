@@ -1,9 +1,38 @@
 from django.db import models
+from django.core.cache import cache
 from django.db.models import Q
+
+
+def get_or_set(key, getter, timeout=3600):
+    value = cache.get(key)
+    if value is None:
+        value = getter()
+        cache.set(key, value, timeout)
+    return value
+
+
+def get_value(manager: models.Manager, name):
+    return get_or_set(name, lambda: manager.get(name=name))
+
+
+class LevelManager(models.Manager):
+
+    def get_info(self):
+        return get_value(self, "INFO")
+
+    def get_warning(self):
+        return get_value(self, "WARNING")
+
+    def get_error(self):
+        return get_value(self, "ERROR")
+
+    def get_debug(self):
+        return get_value(self, "DEBUG")
 
 
 class Level(models.Model):
     name = models.CharField(max_length=20)
+    objects = LevelManager()
 
 
 class ErrorLog(models.Model):
@@ -20,22 +49,22 @@ class TorrentStatus(models.Model):
 
 class TorrentTypeManager(models.Manager):
     def get_no_type(self):
-        return self.get(name="No Type")
+        return get_value(self, "No Type")
 
     def get_movie_series(self):
-        return self.get(name="Movie Series")
+        return get_value(self, "Movie Series")
 
     def get_other(self):
-        return self.get(name="Other")
+        return get_value(self, "Other")
 
     def get_audiobooks(self):
-        return self.get(name="Audiobooks")
+        return get_value(self, "Audiobooks")
 
     def get_movies(self):
-        return self.get(name="Movies")
+        return get_value(self, "Movies")
 
     def get_home_video(self):
-        return self.get(name="Home Videos")
+        return get_value(self, "Home Videos")
 
 
 class TorrentType(models.Model):
@@ -136,14 +165,32 @@ class TorrentFile(models.Model):
     action_on_finish_done = models.BooleanField(default=False)
 
 
+class TorrentTorBoxSearchManager(models.Manager):
+    def filter_by_query_season_episode(self, query, season=None, episode=None):
+        filter = self.filter(query=query)
+        if season:
+            filter = filter.filter(season=season)
+        if episode:
+            filter = filter.filter(episode=episode)
+        return filter
+
+
 class TorrentTorBoxSearch(models.Model):
     query = models.TextField()
     date = models.DateTimeField()
+    season = models.IntegerField(null=True, blank=True, default=None)
+    episode = models.IntegerField(null=True, blank=True, default=None)
+    objects = TorrentTorBoxSearchManager()
 
 
 class TorrentTorBoxSearchResultManager(models.Manager):
     def filter_by_torrent(self, torrent: Torrent):
         return self.filter(Q(hash=torrent.hash) | Q(torrent=torrent))
+
+    def delete_unassigned(self, query: TorrentTorBoxSearch):
+        return self.filter(
+            torrent__isnull=True, queue__isnull=True, query=query
+        ).delete()
 
 
 class TorrentTorBoxSearchResult(models.Model):
@@ -155,7 +202,9 @@ class TorrentTorBoxSearchResult(models.Model):
     year = models.CharField(max_length=5, null=True, blank=True, default=None)
     codec = models.CharField(max_length=255, null=True, blank=True, default=None)
     season = models.IntegerField(null=True, blank=True, default=None)
-    episode = models.IntegerField(null=True, blank=True, default=None)
+    episode = models.CharField(
+        max_length=255, null=True, blank=True, default=None
+    )  # stores episodes as "1,2,3,4"
     episode_name = models.CharField(max_length=255, blank=True, default=None, null=True)
     magnet = models.TextField()
     age = models.CharField(max_length=10)
@@ -166,5 +215,41 @@ class TorrentTorBoxSearchResult(models.Model):
     torrent = models.ForeignKey(
         Torrent, null=True, blank=True, default=None, on_delete=models.SET_NULL
     )
+    queue = models.ForeignKey(  # needed to know if I can clear the search
+        TorrentQueue, null=True, blank=True, default=None, on_delete=models.SET_NULL
+    )
 
     objects = TorrentTorBoxSearchResultManager()
+
+
+class ArrBase(models.Model):
+    added_at = models.DateTimeField(auto_now_add=True)
+    last_checked = models.DateTimeField(null=True, blank=True, default=None)
+    last_found = models.DateTimeField(null=True, blank=True, default=None)
+    active = models.BooleanField(default=True)
+
+    last_added_torrent = models.OneToOneField(
+        Torrent,
+        null=True,
+        blank=True,
+        default=None,
+        on_delete=models.SET_NULL,
+        related_name="arr_last_added",
+    )
+    torrent_type = models.ForeignKey(TorrentType, on_delete=models.CASCADE)
+    include_words = models.TextField(null=True, blank=True, default=None)
+    exclude_words = models.TextField(null=True, blank=True, default=None)
+
+
+class ArrMovieSeries(ArrBase):
+    imdbid = models.CharField(max_length=20, unique=True)
+    title = models.CharField(max_length=255, null=True, blank=True, default=None)
+    quality = models.CharField(max_length=50, null=True, blank=True, default=None)
+    encoder = models.CharField(max_length=100, null=True, blank=True, default=None)
+    requested_season = models.IntegerField()
+    requested_episode = models.IntegerField()
+
+
+class ArrErrorLog(models.Model):
+    arr = models.ForeignKey(ArrBase, on_delete=models.CASCADE)
+    error_log = models.ForeignKey(ErrorLog, on_delete=models.CASCADE)

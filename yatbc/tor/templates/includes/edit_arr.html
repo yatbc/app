@@ -1,0 +1,72 @@
+<div class="modal" :class="{ 'd-block': showArr }" tabindex="-1" role="dialog" aria-modal="true" x-show="showArr"
+    @click.outside="showArr = false" style="display: none;">
+    <div class="modal-dialog modal-dialog-centered modal-lg" role="document">
+        <div class="modal-content rounded-2 shadow">
+            <div class="modal-header border-bottom-0">
+                <h1 class="modal-title fs-5" x-text="dialogEditHeader"></h1>
+                <button type="button" class="btn-close" aria-label="Close" @click="showArr = false"></button>
+            </div>
+            <div class="modal-body py-4">
+                <div>
+
+
+                    <div class="mb-3">
+                        <label for="imdbid" class="form-label">Imdb id:</label>
+                        <input id="imdbid" x-model="arrObject.imdbid" @input="validateImdbid()" @blur="validateImdbid()"
+                            :class="{ 'form-control': true, 'is-invalid': !imdbidValid, 'is-valid': imdbidValid }"
+                            placeholder="tt1234567"></input>
+                    </div>
+                    <div class="mb-3">
+                        <label for="seasonEpisode" class="form-label">Requested starting season/episode:</label>
+                        <input id="seasonEpisode" x-model="seasonEpisode" @input="validateSeasonEpisode()"
+                            @blur="validateSeasonEpisode()"
+                            :class="{ 'form-control': true, 'is-invalid': !seasonEpisodeValid, 'is-valid': seasonEpisodeValid }"
+                            placeholder="S1/E1"></input>
+                    </div>
+                    <div class="mb-3">
+                        <label for="quality" class="form-label">Quality:</label>
+                        <input class="form-control" id="quality" x-model="arrObject.quality" maxlength="50"
+                            placeholder="Preferred quality(Optional, will pick any of, separate by coma, priority from left)"></input>
+                    </div>
+                    <div class="mb-3">
+                        <label for="encoder" class="form-label">Encoder:</label>
+                        <input class="form-control" id="encoder" x-model="arrObject.encoder" maxlength="100"
+                            placeholder="Preferred encoder(Optional, will pick any of, separate by coma, priority from left)"></input>
+                    </div>
+
+
+                    <div class="mb-3">
+                        <label for="includeWords" class="form-label">Include words:</label>
+                        <input class="form-control" id="includeWords" x-model="arrObject.include_words"
+                            placeholder="Optional words in the torrent name(Will only include downloads with any match, separate by coma)"></input>
+                    </div>
+                    <div class="mb-3">
+                        <label for="excludeWords" class="form-label">Exclude words:</label>
+                        <input class="form-control" id="excludeWords" x-model="arrObject.exclude_words"
+                            placeholder="Optional words to exclude in the torrent name(Will exclude all downloads with any match, separate by coma)"></input>
+                    </div>
+
+
+
+                </div>
+
+
+            </div>
+            <div class="modal-footer d-flex justify-content-end w-100 gap-2 pb-3 border-top-0">
+                <button type="button" class="btn btn-warning" @click="changeActivityStatus(arrObject)"
+                    :disabled="!arrObject.id" x-show="arrObject.imdbid!='DEFAULT'"
+                    x-text="arrObject.active ? 'Deactivate' : 'Activate'">
+                </button>
+                <button type="button" class="btn btn-secondary" @click="showArr = false">
+                    Close
+                </button>
+
+                <div class="d-flex">
+                    <button class="btn btn-primary ms-auto" :disabled="!canAdd||isLoading" @click="save_arr()"
+                        x-text="saveButtonText"></button>
+                </div>
+
+            </div>
+        </div>
+    </div>
+</div>

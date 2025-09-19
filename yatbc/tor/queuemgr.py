@@ -1,4 +1,11 @@
-from .models import TorrentQueue, TorrentType, TorrentErrorLog, TorrentHistory, Torrent
+from .models import (
+    TorrentQueue,
+    TorrentType,
+    TorrentErrorLog,
+    TorrentHistory,
+    Torrent,
+    Level,
+)
 from constance import config
 from pathlib import Path
 from django.utils import timezone
@@ -10,7 +17,6 @@ from .commondao import (
     torrent_to_log,
     get_active_torrents_with_current_history,
 )
-from .statusmgr import StatusMgr
 
 MANUAL_POLICY = 0
 
@@ -27,19 +33,17 @@ def get_queue_count():
 
 
 def add_to_queue_by_magnet(magnet, torrent_type):
-    status_mgr = StatusMgr.get_instance()
     logger = logging.getLogger("torbox")
     entry = TorrentQueue.objects.create(magnet=magnet, torrent_type=torrent_type)
     add_log(
         message=f"Added torrent to queue with id: {format_log_value(entry.id)}",
-        level=status_mgr.INFO,
+        level=Level.objects.get_info(),
         source="queuemgr",
     )
     return entry
 
 
 def add_to_queue_by_torrent_file(path: Path, torrent_type: TorrentType, private):
-    status_mgr = StatusMgr.get_instance()
     logger = logging.getLogger("torbox")
     if path.suffix.lower() != ".torrent":
         logger.error(f"Wrong path given to add to queue by torrent file: {path}")
@@ -54,7 +58,7 @@ def add_to_queue_by_torrent_file(path: Path, torrent_type: TorrentType, private)
         )
         add_log(
             message=f"Added torrent to queue with id: {format_log_value(entry.id)}, from path: {format_log_value(path.as_posix())}, and marked as private: {format_log_value(private)}",
-            level=status_mgr.INFO,
+            level=Level.objects.get_info(),
             source="queuemgr",
         )
         return entry
@@ -62,7 +66,6 @@ def add_to_queue_by_torrent_file(path: Path, torrent_type: TorrentType, private)
 
 
 def get_queue_folders():
-    status_mgr = StatusMgr.get_instance()
     logger = logging.getLogger("torbox")
     queue_root_dir = Path(config.QUEUE_DIR)
     torrent_types = TorrentType.objects.all()
@@ -74,14 +77,14 @@ def get_queue_folders():
                 path.mkdir(parents=True)
                 add_log(
                     message=f"For type: {format_log_value(type.name)}, queue folder:<br/>{format_log_value(path.as_posix())}<br/> didn't exist. Created.",
-                    level=status_mgr.INFO,
+                    level=Level.objects.get_info(),
                     source="queuemgr",
                 )
             yield path, type
 
 
 def import_from_queue_folders():
-    status_mgr = StatusMgr.get_instance()
+
     for folder, type in get_queue_folders():
         for entry in folder.iterdir():
             if not entry.is_file():
@@ -95,7 +98,7 @@ def import_from_queue_folders():
                 entry.unlink()
                 add_log(
                     message=f"Removed torrent file: {format_log_value(entry.as_posix())}, after it was added to queue",
-                    level=status_mgr.INFO,
+                    level=Level.objects.get_info(),
                     source="queuemgr",
                 )
 
@@ -103,18 +106,17 @@ def import_from_queue_folders():
 def delete_torrent_with_log(torrent: Torrent):
     from .torboxapi import delete_torrent
 
-    status_mgr = StatusMgr.get_instance()
     if delete_torrent(torrent_id=torrent.id):
         add_log(
             message=f"Active downloads cleaned torrent: {torrent_to_log(torrent)}",
-            level=status_mgr.INFO,
+            level=Level.objects.get_info(),
             source="queuemgr",
             torrent=torrent,
         )
 
 
 def clean_active_downloads():
-    status_mgr = StatusMgr.get_instance()
+
     logger = logging.getLogger("torbox")
 
     BY_RATIO_ONE_HOUR = 1
@@ -147,7 +149,7 @@ def clean_active_downloads():
             cleaned += 1
     add_log(
         message=f"Active Torrents Cleaning action removed: {cleaned} torrents from remote client",
-        level=status_mgr.INFO,
+        level=Level.objects.get_info(),
         source="queuemgr",
     )
     return cleaned
@@ -157,7 +159,6 @@ def add_from_queue():
     from .torboxapi import add_torrent_from_queue
     from .torboxapi import get_free_download_slots
 
-    status_mgr = StatusMgr.get_instance()
     logger = logging.getLogger("torbox")
     queue_count = get_queue_count()
     if queue_count < 1:
@@ -180,7 +181,7 @@ def add_from_queue():
             add_log(
                 message=f"Queue is not empty({queue_count}), but there are no free download slots. Try removing them manually or enable auto-clean. This message will not be repeated today.",
                 source="queuemgr",
-                level=status_mgr.WARNING,
+                level=Level.objects.get_warning(),
             )
             next_notification = datetime.now() + timedelta(days=1)
             config.SUPPRESS_NO_FREE_SLOTS_IN_QUEUE_MSG = next_notification.isoformat()
@@ -190,14 +191,14 @@ def add_from_queue():
         if not new_torrent:
             add_log(
                 message=f"While adding torrents from queue, {format_log_value(entry.id)} could not add torrent",
-                level=status_mgr.ERROR,
+                level=Level.objects.get_error(),
                 source="queuemgr",
             )
             return
         entry.delete()
         add_log(
             message=f"Added torrent: {torrent_to_log(new_torrent)} from queue",
-            level=status_mgr.INFO,
+            level=Level.objects.get_info(),
             source="queuemgr",
             torrent=new_torrent,
         )

@@ -31,6 +31,10 @@ if DEBUG:
     PERSISTENT_DIR = BASE_DIR / "data" / "persistent"
 else:
     PERSISTENT_DIR = Path("/data") / "persistent"
+
+if os.environ.get("DOCKER_DEBUG") == "true":
+    PERSISTENT_DIR = Path("/data") / "persistent"
+    DEBUG = True
 load_dotenv(PERSISTENT_DIR / ".env")
 
 SECRET_KEY = os.getenv("DJANGO_SECRET_KEY")

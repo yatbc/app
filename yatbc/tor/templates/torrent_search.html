@@ -21,7 +21,9 @@
           <th scope="col">Seeders</th>
           <th scope="col">Peers</th>
           <th scope="col">Size</th>
-          <th scope="col">Action</th>
+          <th scope="col">Season</th>
+          <th scope="col" class="d-none d-lg-table-cell">Episode(s)</th>
+          <th scope="col" class="d-none d-lg-table-cell">Action</th>
         </tr>
       </thead>
 
@@ -30,13 +32,15 @@
           <template x-for="entry in torrents" :key="index">
 
             <tr>
-              <td :class="{'text-warning': entry.torrent, 'text-success': entry.cached, '': entry.cached == false } "
+              <td
+                :class="{'text-warning': entry.torrent, 'text-success': entry.cached, '': entry.cached == false, 'truncate-text-cell':true } "
                 x-text="entry.raw_title"></td>
               <td :class="{'text-success': entry.cached, '': entry.cached == false }" x-text="entry.cached"></td>
-              <td :class="{'text-warning': entry.torrent }" x-text="{ entry.torrent > 0 }"></td>
               <td x-text="entry.last_known_seeders"></td>
               <td x-text="entry.last_known_peers"></td>
               <td x-text="formatBytes(entry.size)"></td>
+              <td class="d-none d-lg-table-cell" x-text="entry.season"></td>
+              <td class="d-none d-lg-table-cell" x-text="entry.episode"></td>
               <td>
                 <button type="button" class="btn btn-outline-primary btn-sm" @click="downloadFile(entry.id)">Add to
                   TorBox
@@ -48,14 +52,14 @@
         </template>
         <template x-if="torrents.length === 0 && !isLoading">
           <tr>
-            <td colspan="7" class="text-center text-muted py-3">
+            <td colspan="8" class="text-center text-muted py-3">
               No results found.
             </td>
           </tr>
         </template>
         <template x-if="torrents.length === 0 && isLoading">
           <tr>
-            <td colspan="7" class="text-center text-muted py-3">
+            <td colspan="8" class="text-center text-muted py-3">
               Search in progress...
             </td>
           </tr>

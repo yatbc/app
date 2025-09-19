@@ -18,7 +18,7 @@
                     <td :class="{'text-danger': entry.level == 'ERROR', 'text-success': entry.level == 'INFO', 'text-warning': entry.level == 'WARNING' } "
                         x-text="entry.level"></td>
                     <td x-text="entry.source"></td>
-                    <td x-html="entry.message" class="text-break">
+                    <td x-html="entry.message" class="truncate-text-cell">
                     </td>
                     <td>
                         <template x-if="entry.torrent_id">

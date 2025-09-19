@@ -1,32 +1,37 @@
 {% include 'includes/theme.html' %}
 {% load static %}
 {% include 'includes/head.html' %}
-
+<script src="{% static 'js/add_torrent.js' %}"></script>
 <script src="{% static 'js/index.js' %}"></script>
 </head>
 
 <body>
 
     {% include 'includes/navbar.html' %}
+    {% csrf_token %}
+
 
     <h1>Torrents</h1>
     <div x-data="getData()">
         {% include 'includes/alert.html' %}
         {% include 'includes/confirm.html' %}
         {% include 'includes/wait.html' %}
-
-        <table class="table table-striped">
+        {% include 'includes/add_torrent.html' %}
+        <div class="mb-3 d-flex">
+            <button class="btn btn-primary" @click="showAddTorrent()">Add torrent</button>
+        </div>
+        <table class="table table-striped  table-responsive">
             <thead>
                 <tr>
-                    <th scope="col">Client</th>
+                    <th scope="col" class="d-none d-lg-table-cell">Client</th>
                     <th scope="col">Status</th>
-                    <th scope="col">Name</th>
-                    <th scope="col">Size</th>
-                    <th scope="col">Ratio</th>
-                    <th scope="col">Seeds</th>
-                    <th scope="col">Peers</th>
-                    <th scope="col">Remote client init at</th>
-                    <th scope="col">Remote client last update at</th>
+                    <th scope="col">Details</th>
+                    <th scope="col" class="d-none d-lg-table-cell">Size</th>
+                    <th scope="col" class="d-none d-lg-table-cell">Ratio</th>
+                    <th scope="col" class="d-none d-lg-table-cell">Seeds</th>
+                    <th scope="col" class="d-none d-lg-table-cell">Peers</th>
+                    <th scope="col">Age</th>
+                    <th scope="col">Updated</th>
                     <th scope="col">Availability</th>
                     <th scope="col">Actions</th>
                 </tr>
@@ -49,12 +54,13 @@
             <template x-for="(entry, index) in torrents" :key="index">
                 <tbody>
                     <tr>
-                        <td x-text="entry.torrent.client"></td>
+                        <td x-text="entry.torrent.client" class="d-none d-lg-table-cell"></td>
                         <td :class="{
                     'text-success': entry.torrent.local_status.level.name == 'INFO',                    
                     'text-warning': entry.torrent.local_status.level.name == 'WARNING',
-                    'text-danger': entry.torrent.local_status.level.name == 'ERROR'                    
-                }" x-text="entry.torrent.local_status.name"></td>
+                    'text-danger': entry.torrent.local_status.level.name == 'ERROR',
+                    'truncate-text-cell':true                    
+                } " x-text="entry.torrent.local_status.name"></td>
 
                         <td>
                             <div class="d-flex gap-1">
@@ -77,29 +83,29 @@
                                         'link-primary': entry.history.seeds > 0,
                                         'link-warning': (entry.history.seeds == 0 || entry.torrent.doubled || entry.torrent.redownload) && entry.torrent.download_finished === false,
                                         'link-danger': entry.torrent.availability < 1,
-                                        '': entry.torrent.active === true,
+                                        '': entry.torrent.active === true
                                     }" :href="'torrent_details/' + entry.torrent.id" x-text="entry.torrent.name"></a>
                                 </dic>
                         </td>
                         <!--      <td x-text="entry.torrent.deleted"></td>-->
                         <!--      <td x-text="entry.torrent.download_finished"></td>-->
                         <!--      <td x-text="entry.torrent.total_downloaded"></td>-->
-                        <td x-text="formatBytes(entry.torrent.size)"></td>
+                        <td x-text="formatBytes(entry.torrent.size)" class="d-none d-lg-table-cell"></td>
                         <!--      <td x-text="entry.torrent.total_uploaded"></td>-->
-                        <td x-text="entry.history.ratio"></td>
+                        <td x-text="entry.history.ratio" class="d-none d-lg-table-cell"></td>
                         <td :class="{                    
                     'text-danger': entry.history.seeds == 0 && entry.torrent.download_finished === false,                    
                     '': !(entry.history.seeds == 0 && entry.torrent.download_finished === false),
-                }" x-text="entry.history.seeds"></td>
-                        <td x-text="entry.history.peers"></td>
-                        <td x-text="entry.torrent.created_at"></td>
-                        <td x-text="entry.history.updated_at"></td>
+                 'd-none d-lg-table-cell': true}" x-text="entry.history.seeds"></td>
+                        <td x-text="entry.history.peers" class="d-none d-lg-table-cell"></td>
+                        <td x-text="entry.torrent.formatted_age"></td>
+                        <td x-text="entry.history.last_updated_ago"></td>
                         <td :class="{                    
                     'text-danger': entry.history.availability < 1 && entry.torrent.download_finished === false,                    
                     '': !(entry.history.availability < 1 && entry.torrent.download_finished === false),
                 }" x-text="entry.history.availability"></td>
 
-                        <td class="w-25">
+                        <td>
                             <div class="d-flex">
                                 <button type="button" class="btn btn-outline-danger btn-sm"
                                     @click="deleteTorrent(entry.torrent.id, index)" data-bs-toggle="tooltip"

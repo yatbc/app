@@ -1,5 +1,5 @@
 from .models import TorrentStatus, Torrent, Level, TorrentFile, TorrentType
-from .commondao import add_log, format_log_value, torrent_to_log
+from .commondao import add_log, format_log_value, torrent_to_log, torrent_file_to_log
 from django.utils import timezone
 from pathlib import Path
 import logging
@@ -9,11 +9,6 @@ import logging
 # refactor, change to free functions, and extract class VARS as singletone
 class StatusMgr:
     SOURCE = "statusmgr"
-
-    DEBUG = None
-    INFO = None
-    WARNING = None
-    ERROR = None
 
     unknown = None
 
@@ -42,7 +37,7 @@ class StatusMgr:
 
         add_log(
             f"Torrent: {torrent_to_log(torrent)} finished on Remote Client, adding to Aria2c",
-            level=StatusMgr.get_instance().INFO,
+            level=Level.objects.get_info(),
             source=self.SOURCE,
             local_status=self.client_done,
             torrent=torrent,
@@ -54,7 +49,7 @@ class StatusMgr:
         torrent.save()
         add_log(
             message=f"Torrent: {torrent_to_log(torrent)} added to client: {format_log_value(torrent.client)}",
-            level=self.INFO,
+            level=Level.objects.get_info(),
             source=self.SOURCE,
             torrent=torrent,
         )
@@ -62,10 +57,19 @@ class StatusMgr:
     def remote_client_progress(self, torrent: Torrent):
         add_log(
             message=f"Remote client is working on {torrent_to_log(torrent)}",
-            level=StatusMgr.get_instance().INFO,
+            level=Level.objects.get_info(),
             source=self.SOURCE,
             torrent=torrent,
             local_status=self.client_progress,
+        )
+
+    def remote_client_error(self, torrent: Torrent):
+        add_log(
+            message=f"Remote client failed for {torrent_to_log(torrent)}. Try re-downloading again. If problem will persist check service provider site.",
+            level=Level.objects.get_error(),
+            source=self.SOURCE,
+            torrent=torrent,
+            local_status=self.client_error,
         )
 
     def aria_new(self, torrent):
@@ -73,7 +77,7 @@ class StatusMgr:
         torrent.save()
         add_log(
             message=f"Torrent: {torrent_to_log(torrent)} send to Aria2c",
-            level=self.INFO,
+            level=Level.objects.get_info(),
             source=self.SOURCE,
             torrent=torrent,
             local_status=self.local_new,
@@ -94,7 +98,7 @@ class StatusMgr:
         )
         add_log(
             message=f"New torrent created: {torrent_to_log(torrent)} with hash: {format_log_value(torrent.hash)}, and client internal id: {format_log_value(torrent.internal_id)}",
-            level=self.INFO,
+            level=Level.objects.get_info(),
             source=self.SOURCE,
             torrent=torrent,
         )
@@ -103,7 +107,7 @@ class StatusMgr:
     def action_error(self, torrent, message):
         add_log(
             message=message,
-            level=self.ERROR,
+            level=Level.objects.get_error(),
             source=self.SOURCE,
             torrent=torrent,
             local_status=self.finish_error,
@@ -112,7 +116,7 @@ class StatusMgr:
     def action_start(self, torrent, message):
         add_log(
             message=message,
-            level=self.INFO,
+            level=Level.objects.get_info(),
             source=self.SOURCE,
             torrent=torrent,
             local_status=self.finish_started,
@@ -121,7 +125,7 @@ class StatusMgr:
     def action_progress(self, torrent, message):
         add_log(
             message=message,
-            level=self.INFO,
+            level=Level.objects.get_info(),
             source=self.SOURCE,
             torrent=torrent,
             local_status=self.finish_progress,
@@ -130,7 +134,7 @@ class StatusMgr:
     def torrent_done(self, torrent: Torrent):
         add_log(
             message=f"Torrent: {torrent_to_log(torrent)} finished actions, and is marked as done.",
-            level=self.INFO,
+            level=Level.objects.get_info(),
             source=self.SOURCE,
             torrent=torrent,
         )
@@ -149,34 +153,41 @@ class StatusMgr:
                     message=f"Source dir: {format_log_value(source_dir.as_posix())} for torrent: {torrent_to_log(torrent)}, was not needed anymore and was deleted",
                     source=self.SOURCE,
                     torrent=torrent,
-                    level=self.INFO,
+                    level=Level.objects.get_info(),
                 )
             except Exception as e:
                 message = f"Couldn't remove dir: {format_log_value(source_dir)},<br/> error: {format_log_value(e)},<br/> remove it manually"
                 add_log(
                     message=message,
                     source=self.SOURCE,
-                    level=self.WARNING,
+                    level=Level.objects.get_warning(),
                     torrent=torrent,
                 )
 
     def aria_error(self, torrent, message):
         add_log(
             message=message,
-            level=self.ERROR,
+            level=Level.objects.get_error(),
             source=self.SOURCE,
             torrent=torrent,
             local_status=self.local_error,
         )
 
-    def aria_progress(self, torrent, message):
+    def aria_progress(self, torrent, message, done_downloading=False, file=None):
         add_log(
             torrent=torrent,
             local_status=self.local_progress,
             message=message,
-            level=self.INFO,
+            level=Level.objects.get_info(),
             source=self.SOURCE,
         )
+        if done_downloading:
+            add_log(
+                message=f"File: {torrent_file_to_log(file)} has finished downloading in Aria",
+                level=Level.objects.get_info(),
+                source=self.SOURCE,
+                torrent=torrent,
+            )
 
     def aria_done(self, torrent):
         torrent.local_download_progress = 1
@@ -184,7 +195,7 @@ class StatusMgr:
         torrent.save()
         add_log(
             message=f"Torrent: {torrent_to_log(torrent)} has finished local download, adding task for action on finish",
-            level=self.INFO,
+            level=Level.objects.get_info(),
             source=self.SOURCE,
             torrent=torrent,
             local_status=self.local_done,
@@ -203,11 +214,7 @@ class StatusMgr:
 
     def __init__(self):
         self.logger = logging.getLogger("torbox")
-        if StatusMgr.DEBUG is None:
-            StatusMgr.DEBUG = Level.objects.get(name="DEBUG")
-            StatusMgr.INFO = Level.objects.get(name="INFO")
-            StatusMgr.WARNING = Level.objects.get(name="WARNING")
-            StatusMgr.ERROR = Level.objects.get(name="ERROR")
+        if StatusMgr.unknown is None:
 
             StatusMgr.unknown = TorrentStatus.objects.get(name="Unknown")
 

@@ -19,10 +19,10 @@
         <tr>
           <th scope="col" style="width: 100px;">Client</th>
           <th scope="col">Name</th>
-          <th scope="col" style="width: 400px;">Hash</th>
-          <th scope="col" style="width: 100px;">Total Uploaded</th>
-          <th scope="col" style="width: 100px;">Download finished</th>
-          <th scope="col" style="width: 100px;">Local download finished</th>
+          <th scope="col" class="d-none d-lx-table-cell" style="width: 400px;">Hash</th>
+          <th scope="col" class="d-none d-lg-table-cell" style="width: 100px;">Total Uploaded</th>
+          <th scope="col" class="d-none d-lg-table-cell" style="width: 100px;">Download finished</th>
+          <th scope="col" class="d-none d-lg-table-cell" style="width: 100px;">Local download finished</th>
           <th scope="col" style="width: 150px;">Finished at</th>
           <th scope="col" style="width: 200px;">Actions</th>
         </tr>
@@ -34,20 +34,21 @@
 
             <tr>
               <td x-text="entry.client"></td>
-              <td class="text-break">
+              <td>
                 <div class="d-flex align-items-center gap-1">
                   <div class="btn btn-primary btn-sm disabled btn-torrent-type" role="status" aria-disabled="true"
                     x-text="torrent_types.find(item => item.id === entry.torrent_type).name">
                   </div>
-                  <span x-text="entry.name"></span>
+                  <span class="truncate-text-cell" x-text="entry.name"></span>
                 </div>
               </td>
-              <td x-text="entry.hash"></td>
-              <td x-text="formatBytes(entry.total_uploaded)"></td>
+              <td x-text="entry.hash" class="d-none d-lx-table-cell truncate-text-cell"></td>
+              <td x-text="formatBytes(entry.total_uploaded)" class="d-none d-lg-table-cell"></td>
               <td x-text="entry.download_finished"
-                :class="{'text-danger': !entry.download_finished, 'text-success': entry.download_finished } "></td>
+                :class="{'text-danger': !entry.download_finished, 'text-success': entry.download_finished,  'd-none d-lg-table-cell' : true}">
+              </td>
               <td x-text="entry.local_download_finished"
-                :class="{'text-danger': !entry.local_download_finished, 'text-success': entry.local_download_finished } ">
+                :class="{'text-danger': !entry.local_download_finished, 'text-success': entry.local_download_finished,  'd-none d-lg-table-cell': true}">
               </td>
               <td x-text="entry.finished_at"></td>
 

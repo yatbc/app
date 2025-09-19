@@ -1,3 +1,9 @@
 .btn-torrent-type {
     min-width: 110px;
 }
+
+.truncate-text-cell {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
