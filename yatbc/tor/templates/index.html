@@ -17,14 +17,19 @@
         {% include 'includes/confirm.html' %}
         {% include 'includes/wait.html' %}
         {% include 'includes/add_torrent.html' %}
+        {% include 'includes/pagination.html' %}
         <div class="mb-3 d-flex">
             <button class="btn btn-primary" @click="showAddTorrent()">Add torrent</button>
+
+            <div class="col-md-2 col-sm-5 fw-bold">Entries in queue:</div>
+            <div class="col-md-2 col-sm-2" x-text="queue_size"></div>
+
         </div>
-        <table class="table table-striped  table-responsive">
+        <table class="table table-responsive">
             <thead>
                 <tr>
-                    <th scope="col" class="d-none d-lg-table-cell">Client</th>
-                    <th scope="col">Status</th>
+                    <th scope="col" width="130" class="d-none d-lg-table-cell">Client</th>
+                    <th scope="col" width="230">Status</th>
                     <th scope="col">Details</th>
                     <th scope="col" class="d-none d-lg-table-cell">Size</th>
                     <th scope="col" class="d-none d-lg-table-cell">Ratio</th>
@@ -35,24 +40,84 @@
                     <th scope="col">Availability</th>
                     <th scope="col">Actions</th>
                 </tr>
+
             </thead>
-            <template x-if="torrents.length === 0 && !isLoading">
-                <tr>
-                    <td colspan="11" class="text-center text-muted py-3">
-                        No torrents, add some to get started!
+            <tbody>
+                <tr><!--Filters-->
+                    <td class="d-none d-lg-table-cell">
+                        <select x-model="selectedClient" class="form-select"
+                            @change="filterByClient($event.target.value)">
+                            <option value="ALL" :selected="selectedClient == 'All'">All</option>
+                            {% if use_transmission %}
+                            <option value="Transmission" :selected="selectedClient == 'Transmission'">Transmission
+                            </option>
+                            {% endif %}
+                            <option value="TorBox" :selected="selectedClient == 'TorBox'">TorBox</option>
+
+                        </select>
+                    </td>
+                    <td>
+                        <select class="form-select" x-model="selectedTorrentStatusId"
+                            @change="filterByStatus($event.target.value)">
+                            <template x-for="item in torrent_statuses" :key="item.id">
+                                <option :value="item.id" x-text="item.name"
+                                    :selected="item.id == selectedTorrentStatusId">
+                                </option>
+                            </template>
+                        </select>
+                    </td>
+                    <td>
+                        <div class="d-flex align-items-center gap-2">
+                            <select class="form-select" x-model="selectedPrivateStatus"
+                                @change="filterByPrivateStatus($event.target.value)">
+                                <option value="ALL" :selected="'ALL' == selectedPrivateStatus">ALL</option>
+                                <option value="1" :selected="1 == selectedPrivateStatus">Private</option>
+                                <option value="0" :selected="0 == selectedPrivateStatus">Public</option>
+                            </select>
+
+                            <input type="text" class="form-control flex-grow-1" placeholder="Search by name..."
+                                @input="filterByName($event.target.value)" />
+                        </div>
+                    </td>
+                    <td></td>
+                    <td></td>
+                    <td></td>
+                    <td></td>
+                    <td></td>
+                    <td></td>
+                    <td></td>
+                    <td>
+                        <select class="form-select" @change="filterByTorrentType($event.target.value)">
+                            <template x-for="item in torrent_types_filter" :key="item.id">
+                                <option :value="item.id" x-text="item.name"
+                                    :selected="item.id == selectedTorrentTypeId">
+                                </option>
+                            </template>
+                        </select>
                     </td>
                 </tr>
-            </template>
-            <template x-if="torrents.length === 0 && isLoading">
-                <tr>
-                    <td colspan="11" class="text-center text-muted py-3">
-                        Loading data, please wait...
-                    </td>
-                </tr>
-            </template>
+                <template x-if="torrents.length === 0 && !isLoading">
+                    <tr>
+                        <td colspan="11" class="text-center text-muted py-3">
+                            No torrents, add some to get started!
+                        </td>
+                    </tr>
+                </template>
+                <template x-if="torrents.length === 0 && isLoading">
+                    <tr>
+                        <td colspan="11" class="text-center text-muted py-3">
+                            Loading data, please wait...
+                        </td>
+                    </tr>
+                </template>
+            </tbody>
+
+
 
             <template x-for="(entry, index) in torrents" :key="index">
+                <!-- x-for requires one child, so use tbody as aggregate for data and progress bar row -->
                 <tbody>
+
                     <tr>
                         <td x-text="entry.torrent.client" class="d-none d-lg-table-cell"></td>
                         <td :class="{
@@ -112,9 +177,21 @@
                                     data-bs-placement="top"
                                     title="Removes torrent from torrent client and moves it to history. Does not remove downloaded files. If there are Aria active downloads, they will continue.">Delete
                                 </button>
+                                <button type="button" class="btn btn-outline-warning btn-sm"
+                                    x-show="!entry.torrent.finished_at || entry.torrent.local_status.name == 'Local download: Error'"
+                                    data-bs-toggle="tooltip" data-bs-placement="top" title="Finish torrent"
+                                    @click="finishTorrent(entry.torrent.id)">Mark as done
+                                </button>
+                                <button type="button" class="btn btn-outline-warning btn-sm"
+                                    x-show="entry.torrent.finished_at || entry.torrent.local_status.name == 'Local download: Error'"
+                                    data-bs-toggle="tooltip" data-bs-placement="top"
+                                    title="Force redownload files from remote client to local storage"
+                                    @click="redownloadLocalFiles(entry.torrent.id)">Redownload local
+                                </button>
                                 {% if use_transmission %}
                                 <button type="button" class="btn btn-outline-info btn-sm"
-                                    x-show="!entry.torrent.doubled" data-bs-toggle="tooltip" data-bs-placement="top"
+                                    x-show="!entry.torrent.doubled && !entry.torrent.private && entry.torrent.magnet"
+                                    data-bs-toggle="tooltip" data-bs-placement="top"
                                     title="Add selected torrent to second client"
                                     @click="doubleTorrent(entry.torrent.id)">Double
                                 </button>
@@ -163,11 +240,9 @@
                 </tbody>
             </template>
 
+
         </table>
-        <div class="row mb-3">
-            <div class="col-md-2 col-sm-5 fw-bold">Entries in queue:</div>
-            <div class="col-md-7 col-sm-7" x-text="queue_size"></div>
-        </div>
+
     </div>
 
 </body>

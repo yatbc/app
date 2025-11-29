@@ -5,7 +5,14 @@ import shutil
 from pathlib import Path
 from django.utils import timezone
 from django.db.models import Q
-from .models import AriaDownloadStatus, TorrentFile, Torrent, TorrentType, Level
+from .models import (
+    AriaDownloadStatus,
+    TorrentFile,
+    Torrent,
+    TorrentType,
+    Level,
+    LogSource,
+)
 from .statusmgr import StatusMgr
 
 from constance import config
@@ -98,7 +105,7 @@ class AriaApi:
             add_log(
                 message=f"Could not download file: <i>'{link}'</i> to <i>'{target_folder}/{target_name}'</i>: <i>'{clean_html(e)}'</i>",
                 level=Level.objects.get_error(),
-                source="ariaapi",
+                source=LogSource.objects.get_aria_api(),
                 torrent=torrent,
             )
             return False, str(e)
@@ -154,7 +161,7 @@ def validate_aria_api(host, port, password, api=None):
         return False, "Aria validation failed: Could not connect to aria2 api", 2
 
 
-def _update_aria_status(json_result, aria_internal_id):
+def _update_aria_status(json_result, aria_download_status: AriaDownloadStatus):
     logger = logging.getLogger("torbox")
     gid = json_result["gid"]
     path = json_result["files"][0]["path"]  # in TorBox there will be always just one
@@ -175,7 +182,7 @@ def _update_aria_status(json_result, aria_internal_id):
     logger.debug(
         f"{gid}, {path}, {completed_length}, {total_length}, {error_message}, {status}"
     )
-    aria_download_status = AriaDownloadStatus.objects.get(internal_id=aria_internal_id)
+
     aria_download_status.path = path
     aria_download_status.error = error_message
     aria_download_status.status = status
@@ -196,6 +203,8 @@ def _update_aria_status(json_result, aria_internal_id):
 
 
 def update_status(aria_internal_id, api=None):
+    logger = logging.getLogger("torbox")
+    aria_download_status = AriaDownloadStatus.objects.get(internal_id=aria_internal_id)
     status_mgr = StatusMgr.get_instance()
     if not api:
         api = AriaApi()
@@ -204,8 +213,18 @@ def update_status(aria_internal_id, api=None):
     file = TorrentFile.objects.filter(
         aria__internal_id=aria_internal_id
     ).first()  # first or none
-    if file:
-        torrent = file.torrent
+    if not file:
+        logger.warning(
+            f"Could not find torrent file for aria internal id: {aria_internal_id}"
+        )
+        aria_download_status.error = (
+            f"Could not find torrent file for aria internal id: {aria_internal_id}"
+        )
+        aria_download_status.status = "error"
+        aria_download_status.save()
+        return
+
+    torrent = file.torrent
 
     if not ok:
         status_mgr.aria_error(
@@ -214,7 +233,7 @@ def update_status(aria_internal_id, api=None):
         )
         return
 
-    status = _update_aria_status(result, aria_internal_id)
+    status = _update_aria_status(result, aria_download_status)
 
     if status.error:
         status_mgr.aria_error(
@@ -246,7 +265,7 @@ def calculate_progress(files: TorrentFile):
             add_log(
                 message=f"File: {torrent_file_to_log(file)} has no Aria id, but torrent has local download set to true: {torrent_to_log(file.torrent)}",
                 level=Level.objects.get_warning(),
-                source="ariaapi",
+                source=LogSource.objects.get_aria_api(),
                 torrent=file.torrent,
             )
             break
@@ -260,7 +279,7 @@ def calculate_progress(files: TorrentFile):
         add_log(
             message=f"Torrent has no total value: {torrent_to_log(files[0].torrent)}, is Aria working? Remove {torrent_file_to_log(file)} and try again. If this happens often, check your Aria settings.",
             level=Level.objects.get_warning(),
-            source="ariaapi",
+            source=LogSource.objects.get_aria_api(),
             torrent=files[0].torrent,
         )
         return 0, 0, False

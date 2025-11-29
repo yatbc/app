@@ -23,6 +23,7 @@ def create_search(
     raw_title="empty",
     queue=None,
     hash="fake",
+    resolution=None,
 ) -> TorrentTorBoxSearchResult:
     if query_object is None:
         query_object = TorrentTorBoxSearch.objects.create(
@@ -43,6 +44,7 @@ def create_search(
         size=1,
         torrent=torrent,
         queue=queue,
+        resolution=resolution,
     )
 
 
@@ -89,6 +91,7 @@ def create_torrent(
     internal_id="123",
     local_download=True,
     created_at="2000-01-01 00:11",
+    download_finished=True,
 ):
     return Torrent.objects.create(
         active=True,
@@ -96,7 +99,7 @@ def create_torrent(
         name="FakeName",
         size=123,
         created_at=created_at,
-        download_finished=True,
+        download_finished=download_finished,
         download_present=True,
         tracker="",
         total_uploaded=0,

@@ -1,34 +1,39 @@
 from django_tasks import task
 from .torboxapi import (
     update_torrent_list,
-    request_dl,
     search_torrent,
     add_torrent,
     change_torrent,
     add_torrent_by_magnet,
+    TorBoxApi,
 )
 from .transmissionapi import (
     transmission_status,
-    transmission_add_torrent,
+    add_torrent_by_magnet as transmission_add_torrent_by_magnet,
     transmission_delete_torrent,
+    TransmissionApi,
+    validate_transmission_api,
 )
-from .arrmanager import get_next_arrs, process_arr, arrs_to_str
-from .ariaapi import check_local_download_status, exec_action_on_finish
+from .arrmanager import get_next_arrs, process_arr
+from .ariaapi import check_local_download_status, exec_action_on_finish, AriaApi
+from .requestdllinkmgr import request_dl_link
 import logging
 from datetime import timedelta
 from django.utils import timezone
 from .models import Torrent
-from django_tasks.backends.database.models import DBTaskResult, ResultStatus
+from django_tasks.backends.database.models import DBTaskResult, TaskResultStatus
 from .common import TORBOX_CLIENT, TRANSMISSION_CLIENT
 from django.db.models import Case, When, Value, IntegerField
 from constance import config
+from .statusmgr import StatusMgr
+from .models import LogSource
 
 
 @task(priority=-10)
 def transmission_status_task():
     logger = logging.getLogger("torbox")
     logger.info("Starting transmission api")
-    transmission_status()
+    transmission_status(request_files_task=transmission_request_torrent_files)
     logger.info("Transmission api done")
 
 
@@ -40,13 +45,43 @@ def check_local_download_status_task():
     logger.info("Local download status check done")
 
 
+def wait_for_task(task):
+    import time
+
+    while not task.is_finished:
+        time.sleep(1)
+        task.refresh()
+    return task.return_value
+
+
 @task()
-def add_magnet(client, magnet, torrent_type):
+def validate_transmission_settings_task(
+    host, port, user, password, dir, sftp_host, sftp_password, sftp_port, sftp_user
+):
+    logger = logging.getLogger("torbox")
+    logger.info("Validating transmission settings")
+    return validate_transmission_api(
+        host=host,
+        port=port,
+        user=user,
+        password=password,
+        dir=dir,
+        sftp_host=sftp_host,
+        sftp_password=sftp_password,
+        sftp_port=sftp_port,
+        sftp_user=sftp_user,
+    )
+
+
+@task()
+def add_magnet(client, magnet, torrent_type_id):
     logger = logging.getLogger("torbox")
     if client == TRANSMISSION_CLIENT:
-        transmission_add_torrent(magnet, torrent_type)
+        transmission_add_torrent_by_magnet(
+            magnet=magnet, torrent_type_id=torrent_type_id
+        )
     elif client == TORBOX_CLIENT:
-        add_torrent_by_magnet(magnet, torrent_type)
+        add_torrent_by_magnet(magnet=magnet, torrent_type_id=torrent_type_id)
     else:
         logger.error(f"Unknown client: {client}")
 
@@ -55,7 +90,7 @@ def add_magnet(client, magnet, torrent_type):
 def torbox_status_task():
     logger = logging.getLogger("torbox")
     logger.info("Starting tor api")
-    update_torrent_list()
+    update_torrent_list(request_files_task=torbox_request_torrent_files)
     logger.info("Tor api done")
 
 
@@ -80,7 +115,33 @@ def process_queue_task():
 def torbox_request_torrent_files(torrent_id):
     logger = logging.getLogger("torbox")
     logger.info(f"Requesting torrent files for torrent id: {torrent_id}")
-    request_dl(torrent_id)
+    request_dl_link(
+        torrent_id,
+        api=TorBoxApi(),
+        aria_api=AriaApi(),
+        status_mgr=StatusMgr.get_instance(),
+        aria_dir=config.ARIA2_DIR,
+        client=TORBOX_CLIENT,
+        source=LogSource.objects.get_torbox_api(),
+    )
+    logger.info("Request done")
+
+
+@task()
+def transmission_request_torrent_files(torrent_id):
+    logger = logging.getLogger("torbox")
+    logger.info(
+        f"Requesting torrent files for torrent id: {torrent_id} from transmission"
+    )
+    request_dl_link(
+        torrent_id,
+        api=TransmissionApi(),
+        aria_api=AriaApi(),
+        status_mgr=StatusMgr.get_instance(),
+        aria_dir=config.ARIA2_DIR,
+        client=TRANSMISSION_CLIENT,
+        source=LogSource.objects.get_transmission_api(),
+    )
     logger.info("Request done")
 
 
@@ -102,9 +163,13 @@ def double_torrent_task(torrent_id):
     if not torrent:
         return False
     if torrent.client == TRANSMISSION_CLIENT:
-        add_torrent_by_magnet(torrent.magnet)
+        add_torrent_by_magnet(
+            magnet=torrent.magnet, torrent_type_id=torrent.torrent_type.id
+        )
     elif torrent.client == TORBOX_CLIENT:
-        transmission_add_torrent(torrent.magnet)
+        transmission_add_torrent_by_magnet(
+            magnet=torrent.magnet, torrent_type_id=torrent.torrent_type.id
+        )
     else:
         logger.error(f"Unknown client: {torrent.client}")
     logger.info("Request done")
@@ -195,7 +260,7 @@ def get_task(task_type, status):
 
 def get_task_queued_or_running(task_type):
     return get_task(
-        task_type=task_type, status=[ResultStatus.READY, ResultStatus.RUNNING]
+        task_type=task_type, status=[TaskResultStatus.READY, TaskResultStatus.RUNNING]
     )
 
 

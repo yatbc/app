@@ -5,13 +5,15 @@ YATBC is an application for Self-Hosting enthusiasts with TorBox api key who lik
 _Disclaimer: This application was developed for educational purposes only and is provided "as is" without any warranty._
 
 ## Is this app for you?
-1. You like self-hosting
-2. You like storing all your files locally
-3. You don't mind minimal gui
-4. You are familiar with docker-compose
-5. You like automation
-6. You don't need/wan't to use full Arr Stack
-6. *You have TorBox api key*
+- You like self-hosting
+- You like storing all your files locally
+- You don't mind minimal gui
+- You are familiar with docker-compose
+- You like automation
+- You don't need/wan't to use full Arr Stack
+- *You have TorBox api key*
+- You would like to use TorBox for public torrents and seed box(Ultra.cc for example) for private torrents 
+
 
 ## How this app works?
 *TLDR*: YATBC automates workflow of using TorBox, downloading files to local drive and moving/coping them when done
@@ -27,6 +29,9 @@ All Integrations can be enabled/disabled in configuration.
 2. Stash integration. Integration works for torrents marked as Home Video. When file will finish downloading to local storage, the app will call Stash's graphql api to scan new folder.
 3. Auto-cleaning download slots. If Download Queue will contain entries and this integration is enabled, when queue will be processed some active downloads(finished more then 1h ago, cached) may be automatically removed. 
 
+## Transmission support
+YATBC can support Transmission as backup torrent client. Transmission files are downloaded via Aria2 thru sftp. You can select transmission to be used as client for private torrents and it can download selected torrent types.
+<img src="docs/images/transmission-queue.png" width="640" style="padding: 5px;">
 ## Arr
 Supports Movie Series monitoring based on build-in TorBox search api.
 Monitoring is done by: Quality, Encoder, Include words, Exclude words, presence in cache.
@@ -53,7 +58,7 @@ YATBC has internal queue, if you want to add large number of files, but have no 
 
 
 ## Future plans/TODO list
-1. Support for Transmission as backup client
+1. ~~Support for Transmission as backup client~~ (Done) 
 2. Support for web links
 3. Support for yt-dlp as backup web links client
 4. Auto extracting and cleanup, if file contains unexpected files, they can be auto removed
@@ -80,6 +85,9 @@ YATBC has internal queue, if you want to add large number of files, but have no 
 2. Start docker compose: `docker compose -f docker-compose.yaml up`, during first run, the `yatbc-prepare` will create in `persistent_data` all initial configs, SQLite database file etc. In your preferred web browser open your host address on selected httpd port(`7097` by default, so if you are running it on your local machine, try http://localhost:7097) and fill the initial configuration.
    - Minimal configuration:
      - TorBox API key and press `Validate TorBox` to check if it is ok
+     - Configure Transmission(get the connection details from your provider) if you will be using it and press `Validate Transmission`
+     <img src="docs/images/transmission-configuration.png" width="1300" style="padding: 5px;">
+     - Configure Stash API(get the connection details from your provider) if you will be using it and press `Validate Stash` 
      - All other, should work with default values, but you can check Aria2c connection before first download
      - If you only changed the named volumes in docker-compose, leave Folders tab as is
    - `Save` and then go to `Status` page, wait few seconds, and you should see if worker connection is working as expected. You should see the status just below the navigation bar.
@@ -87,6 +95,9 @@ YATBC has internal queue, if you want to add large number of files, but have no 
 3. If everything is working, exit docker-compose, and restart it with `-d` parameter: `docker compose -f docker-compose.yaml up -d`. That is it.
 
 ## FAQ:
+0. On status page I see not my files from TorBox?!
+   - This may be a TorBox bug, method `sdk.torrents.get_torrent_list` sometimes returns files belonging to other users when `bypass_cache=True`. If you will see it, create a ticked for TorBox support.
+   
 1. Do I have to configure all volumes? Like `home_data`, `other_data`?
    - You can configure just the ones that you will use (minimum is `aria_data` and `persistent_data`), but the app will be more functional with all folders configured.
 
@@ -126,3 +137,9 @@ YATBC has internal queue, if you want to add large number of files, but have no 
 
 9. Where can I find manual for Movie Series monitoring?
    - In Arr tab, press Help button. There should be up to date manual.
+
+10. When I add files to Transmission, I see that the file was added but I don't see it in YATBC?
+   - YATBC is not showing realtime data. Checking for file status is one of the tasks that the YATBC performs, if there is more tasks in queue(like downloading some other file from remote client), then the Status Page may show old data. The status page will be updated as soon as all the tasks in the queue will be processed.
+
+11. Recently I updated my TorBox subscription, but my download slot limit seems to be the same in YATBC?
+   - YATBC checks available download slots once per day if there are files in the queue. Wait 24 hours, and it should be updated.

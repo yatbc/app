@@ -8,6 +8,8 @@ from .models import (
     TorrentStatus,
     TorrentHistory,
     ArrErrorLog,
+    LogSource,
+    TorrentQueue,
 )
 import math
 from django.db.models import Q, OuterRef, Subquery, ExpressionWrapper, fields, F
@@ -51,7 +53,9 @@ def torrent_file_to_log(file: TorrentFile):
     return f"<i>'{name}'(id: {file.id})</i><br/>"
 
 
-def add_log(message, level, source=None, torrent=None, local_status=None, arr=None):
+def add_log(
+    message, level, source=LogSource, torrent=None, local_status=None, arr=None
+):
     logger = logging.getLogger("torbox")
     log = ErrorLog.objects.create(message=message, level=level, source=source)
     if torrent:
@@ -110,7 +114,9 @@ def update_type(torrent: Torrent):
         logger.debug(f"Torrent {torrent} already had a type, skipping type update")
         return
     movie_series = TorrentType.objects.get(name="Movie Series")
-    result = re.search("[sS]\\d{1,2}([eE]\\d{1,2})*", torrent.name)
+    result = re.search(
+        "[sS]\\d{1,2}([eE]\\d{1,2})*", torrent.name
+    )  # fixme: use common based on action_mgr
     if result:
         logger.info(
             f"Found movie series marker, changing type to movie series for torrent: {torrent}"
@@ -120,7 +126,7 @@ def update_type(torrent: Torrent):
         add_log(
             message=f"Torrent {torrent.name} with hash: {torrent.hash} was added with season/episode marker, updating as movie series type",
             level=Level.objects.get_info(),
-            source="torboxapi",
+            source=LogSource.objects.get_torbox_api(),
             torrent=torrent,
         )
         return
@@ -181,7 +187,7 @@ def update_torrent(new_torrent: Torrent):
             add_log(
                 message=f"Marking torrent: {torrent} as redownload",
                 level=INFO,
-                source="torboxapi",
+                source=LogSource.objects.get_torbox_api(),
                 torrent=torrent,
             )
         if (
@@ -192,6 +198,9 @@ def update_torrent(new_torrent: Torrent):
             logger.info(
                 f"Updated internal id for torrent: {torrent}, old: {torrent.internal_id}, new: {new_torrent.internal_id}"
             )
+
+        if torrent.magnet != new_torrent.magnet:
+            torrent.magnet = new_torrent.magnet
         if torrent.private != new_torrent.private:
             torrent.private = new_torrent.private
         if torrent.cached != new_torrent.cached:
@@ -210,7 +219,7 @@ def update_torrent(new_torrent: Torrent):
             add_log(
                 message=f"New torrent: {torrent_to_log(new_torrent)} has type: {format_log_value(new_torrent.torrent_type.name)}, and old torrent: {torrent_to_log(torrent)} has No Type, updating type to the new one",
                 level=INFO,
-                source="torboxapi",
+                source=LogSource.objects.get_torbox_api(),
                 torrent=torrent,
             )
             torrent.torrent_type = new_torrent.torrent_type
@@ -245,15 +254,55 @@ def mark_deleted_torrents(not_deleted, clients):
     )
 
 
-def get_active_torrents_with_current_history():
+def add_to_queue_by_magnet(magnet, torrent_type):
+    entry = TorrentQueue.objects.create(magnet=magnet, torrent_type=torrent_type)
+    add_log(
+        message=f"Added torrent to queue with id: {format_log_value(entry.id)}",
+        level=Level.objects.get_info(),
+        source=LogSource.objects.get_queue_mgr(),
+    )
+    return entry
+
+
+def get_active_torbox_downloads():
+    return Torrent.objects.filter(deleted=False, client=TORBOX_CLIENT).count()
+
+
+def get_active_transmission_downloads():
+    return Torrent.objects.filter(
+        deleted=False,
+        client=TRANSMISSION_CLIENT,
+        download_finished=False,  # transmission can have unlimited active downloads, assume only unfinished are active
+    ).count()
+
+
+def get_active_torrents_with_current_history(
+    current: int = None,
+    limit: int = None,
+    state_id: int = 0,
+    torrent_type_id: int = 0,
+    client: str = "",
+    private: bool = False,
+    name: str = "",
+):
     latest_details_subquery = (
         TorrentHistory.objects.filter(torrent_id=OuterRef("pk"))
         .order_by("-updated_at", "-pk")
         .values("pk")[:1]
     )
-    return (
-        Torrent.objects.filter(deleted=False)
-        .annotate(latest_history_id=Subquery(latest_details_subquery))
+    filter = Torrent.objects.filter(deleted=False)
+    if state_id != 0:
+        filter = filter.filter(local_status__id=state_id)
+    if torrent_type_id != 0:
+        filter = filter.filter(torrent_type__id=torrent_type_id)
+    if client:
+        filter = filter.filter(client=client)
+    if private is not None:
+        filter = filter.filter(private=private)
+    if name:
+        filter = filter.filter(name__icontains=name)
+    filter = (
+        filter.annotate(latest_history_id=Subquery(latest_details_subquery))
         .annotate(
             age=ExpressionWrapper(
                 timezone.now() - F("created_at"), output_field=fields.DurationField()
@@ -261,6 +310,9 @@ def get_active_torrents_with_current_history():
         )
         .order_by("client")
     )
+    if current is not None and limit is not None:
+        filter = filter[current : current + limit]
+    return filter
 
 
 def get_history_with_age(history_id):
@@ -289,8 +341,18 @@ def format_age(age_in_seconds: int):
         return f"{days}d"
 
 
-def get_active_torrents_with_formatted_age():
-    torrents = get_active_torrents_with_current_history()
+def get_active_torrents_with_formatted_age(
+    current: int = 0,
+    limit: int = 50,
+    state_id: int = 0,
+    torrent_type_id: int = 0,
+    client: str = "",
+    private: bool = False,
+    name: str = "",
+):
+    torrents = get_active_torrents_with_current_history(
+        current, limit, state_id, torrent_type_id, client, private, name
+    )
     for obj in torrents:
         age_in_seconds = obj.age.total_seconds()
         obj.formatted_age = format_age(age_in_seconds)

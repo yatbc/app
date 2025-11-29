@@ -21,6 +21,7 @@
                     <th scope="col" style="width: 300px;">Added at</th>
                     <th scope="col" class="d-none d-lg-table-cell" style="width: 100px;">Priority</th>
                     <th scope="col" style="width: 300px;">Torrent type</th>
+                    <th scope="col" style="width: 200px;">Allowed client</th>
                     <th scope="col">Magnet/Torrent</th>
                     <th scope="col" style="width: 100px;">Actions</th>
                 </tr>
@@ -42,6 +43,7 @@
                                 </select>
 
                             </td>
+                            <td x-text="entry.allowed_client" class="text-break"></td>
 
                             <td>
                                 <template x-if="queue.torrent_private">
@@ -69,14 +71,14 @@
                 </template>
                 <template x-if="queue.length === 0 && !isLoading">
                     <tr>
-                        <td colspan="5" class="text-center text-muted py-3">
+                        <td colspan="6" class="text-center text-muted py-3">
                             Queue is empty.
                         </td>
                     </tr>
                 </template>
                 <template x-if="queue.length === 0 && isLoading">
                     <tr>
-                        <td colspan="5" class="text-center text-muted py-3">
+                        <td colspan="6" class="text-center text-muted py-3">
                             Loading queue...
                         </td>
                     </tr>

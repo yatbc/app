@@ -2,6 +2,8 @@ function getData() {
   return {
     ...commonPagination(),
     log: [],
+    log_sources: [],
+    log_source_filter_id: 0,
     full: false,
     fetchData() {
       this.isLoading = true;
@@ -15,6 +17,22 @@ function getData() {
           console.log("Fetched logs:", json);
           this.log = json.log;
           this.pageCurrentItems = this.log.length;
+        }),
+        (onError = null)
+      );
+    },
+    fetchLogSourcesData() {
+      this.isLoading = true;
+      this.callApi(
+        (api = "/api/get_log_sources_list"),
+        (errorMessage = "Failed to read log sources"),
+        (successMessage = null),
+        (method = "GET"),
+        (body = null),
+        (onSuccess = (json) => {
+          this.log_sources = json.log_sources;
+          console.log("Fetched log sources:", this.log_sources);
+
         }),
         (onError = null)
       );
@@ -43,15 +61,22 @@ function getData() {
       this.showModal = true;
 
     },
+    filter(logSourceId) {
+      console.log("Filtering logs: " + logSourceId);
+      this.extraFilter = "/" + logSourceId;
+      this.reloadPagination();
+    },
     init() {
-      this.fetchData();
+      this.fetchLogSourcesData()
       this.paginatedPageApi = "/api/get_logs";
+      this.extraFilter = "/0" // load all logs 
       this.paginationNewDataCallback = (json) => {
         this.log = json.log;
         this.pageCurrentItems = this.log.length;
         console.log(this.pageCurrentItems);
         this.updateTooltips();
       }
+      this.reloadPagination();
 
     },
 

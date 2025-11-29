@@ -106,10 +106,14 @@ MIDDLEWARE = [
 
 CONSTANCE_CONFIG = {
     "USE_TRANSMISSION": (False, "Use Transmission as local torrent client"),
-    "TRANSMISSION_HOST": ("localhost", "Transmission host"),
+    "TRANSMISSION_HOST": ("", "Transmission host"),
     "TRANSMISSION_PORT": (9091, "Transmission port"),
     "TRANSMISSION_USER": ("", "Transmission username"),
     "TRANSMISSION_PASSWORD": ("", "Transmission password"),
+    "TRANSMISSION_SFTP_HOST": ("", "Transmission sftp host"),
+    "TRANSMISSION_SFTP_PORT": (22, "Transmission sftp port"),
+    "TRANSMISSION_SFTP_PASSWORD": ("", "Transmission host sftp password"),
+    "TRANSMISSION_SFTP_USER": ("", "Transmission host sftp user"),
     "ARIA2_HOST": ("yatbc-aria", "Aria2 host"),
     "ARIA2_PORT": (6800, "Aria2 port"),
     "ARIA2_PASSWORD": (os.getenv("ARIA_SECRET_KEY"), "Aria2 secret"),
@@ -126,8 +130,8 @@ CONSTANCE_CONFIG = {
     "USE_CDN": (True, "Use CDN for js files like bootstrap, alpine js, etc."),
     "SHOW_CONFIG_ON_START": (True, "Show config on start"),
     "USE_DARK": (True, "Use dark theme"),
-    "TRANSMISSION_DIR": (  # obsolete - transmission files will be handled by sftp
-        "/data/tor",
+    "TRANSMISSION_DIR": (
+        "/home/user/downloads/transmission",
         "Where does Transmission store downloaded files?",
     ),
     "ARIA2_DIR": ("/data/aria2", "Where Aria2 should store downloaded files"),
@@ -163,6 +167,46 @@ CONSTANCE_CONFIG = {
     "RESCAN_STASH_ON_HOME_VIDEO": (
         False,
         "Rescan Stash when task for home video runs ",
+    ),
+    "SKIP_DOWNLOAD_FOR_NEXT_STATUS_CHECK_IN_TRANSMISSION": (
+        False,
+        "Skip download for next status check",
+    ),
+    "SKIP_DOWNLOAD_FOR_NEXT_STATUS_CHECK_IN_TORBOX": (
+        False,
+        "Skip download for next status check",
+    ),
+    "DOWNLOAD_PRIVATE_ON_TRANSMISSION_ONLY": (
+        True,
+        "Download private torrents on Transmission only",
+    ),
+    "DOWNLOAD_HOME_VIDEOS_TYPE_ON_TRANSMISSION": (
+        True,
+        "Use transmission for home videos torrents",
+    ),
+    "DOWNLOAD_NO_TYPE_ON_TRANSMISSION": (
+        True,
+        "Use transmission for torrents with not type",
+    ),
+    "DOWNLOAD_MOVIE_TYPE_ON_TRANSMISSION": (
+        True,
+        "Use transmission for movie torrents",
+    ),
+    "DOWNLOAD_MOVIE_SERIES_TYPE_ON_TRANSMISSION": (
+        True,
+        "Use transmission for movie series torrents",
+    ),
+    "DOWNLOAD_AUDIOBOOKS_TYPE_ON_TRANSMISSION": (
+        True,
+        "Use transmission for audiobooks torrents",
+    ),
+    "DOWNLOAD_EBOOKS_TYPE_ON_TRANSMISSION": (
+        True,
+        "Use transmission for e-books torrents",
+    ),
+    "DOWNLOAD_OTHER_TYPE_ON_TRANSMISSION": (
+        True,
+        "Use transmission for other type torrents",
     ),
 }
 

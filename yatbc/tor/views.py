@@ -16,8 +16,9 @@ from django.utils import timezone
 import json
 import requests
 from django.db import IntegrityError
+from .statusmgr import StatusMgr
 from .queuemgr import get_queue_folders, get_active_queue, get_queue_count
-from .common import get_name_from_magnet
+from .common import get_name_from_magnet, TORBOX_CLIENT, TRANSMISSION_CLIENT
 from .commondao import (
     get_active_torrents_with_formatted_age,
     format_age,
@@ -33,7 +34,9 @@ from .models import (
     ErrorLog,
     TorrentFile,
     TorrentQueue,
+    LogSource,
     ArrMovieSeries,
+    TorrentStatus,
 )
 from .tasks import (
     queue_torbox_status,
@@ -48,14 +51,13 @@ from .tasks import (
     get_task,
     get_tasks,
     not_status_checking,
-    ResultStatus,
+    TaskResultStatus,
     queue_import_from_queue_folders,
     process_arr_task,
 )
 
 from .torboxapi import validate_api, add_referral_api
 from .ariaapi import validate_aria_api
-from .transmissionapi import validate_transmission_api
 from .stashapi import validate_stash_api
 
 
@@ -66,14 +68,14 @@ def data_updates(request):
             item
             for item in get_tasks(
                 exclude_tasks_type=not_status_checking,
-                status=[ResultStatus.RUNNING],
+                status=[TaskResultStatus.RUNNING],
             )
         ]
         if not active_tasks:
             return None, ""
         path = active_tasks[0].task_path
         for i in range(0, timeout):
-            task = get_task(path, [ResultStatus.RUNNING])
+            task = get_task(path, [TaskResultStatus.RUNNING])
             if not task:
                 logger.debug(f"Task {path} is done")
                 return True, ""
@@ -103,14 +105,14 @@ def data_updates(request):
                 previous_done_tasks_count = current_done_tasks_count
                 current_done_tasks_count = get_tasks(
                     exclude_tasks_type=not_status_checking,
-                    status=[ResultStatus.SUCCEEDED, ResultStatus.FAILED],
+                    status=[TaskResultStatus.SUCCEEDED, TaskResultStatus.FAILED],
                 ).count()
 
                 queued_tasks = [
                     item
                     for item in get_tasks(
                         exclude_tasks_type=not_status_checking,
-                        status=[ResultStatus.READY],
+                        status=[TaskResultStatus.READY],
                     )
                 ]
 
@@ -168,12 +170,20 @@ def get_config(request):
     torrent_types = [model_to_dict(entry) for entry in folders]
     config_data = {
         "configuration": {
+            "SKIP_DOWNLOAD_FOR_NEXT_STATUS_CHECK_IN_TORBOX": config.SKIP_DOWNLOAD_FOR_NEXT_STATUS_CHECK_IN_TORBOX,
+            "SKIP_DOWNLOAD_FOR_NEXT_STATUS_CHECK_IN_TRANSMISSION": config.SKIP_DOWNLOAD_FOR_NEXT_STATUS_CHECK_IN_TRANSMISSION,
             "QUEUE_DIR": config.QUEUE_DIR,
             "USE_TRANSMISSION": config.USE_TRANSMISSION,
             "TRANSMISSION_HOST": config.TRANSMISSION_HOST,
             "TRANSMISSION_PORT": config.TRANSMISSION_PORT,
             "TRANSMISSION_USER": config.TRANSMISSION_USER,
             "TRANSMISSION_DIR": config.TRANSMISSION_DIR,
+            "TRANSMISSION_PASSWORD_SET": len(config.TRANSMISSION_PASSWORD) > 0,
+            "TRANSMISSION_SFTP_USER": config.TRANSMISSION_SFTP_USER,
+            "TRANSMISSION_SFTP_PORT": config.TRANSMISSION_SFTP_PORT,
+            "TRANSMISSION_SFTP_HOST": config.TRANSMISSION_SFTP_HOST,
+            "TRANSMISSION_SFTP_PASSWORD_SET": len(config.TRANSMISSION_SFTP_PASSWORD)
+            > 0,
             "ARIA2_HOST": config.ARIA2_HOST,
             "ARIA2_PORT": config.ARIA2_PORT,
             "ARIA2_DIR": config.ARIA2_DIR,
@@ -191,6 +201,14 @@ def get_config(request):
             "STASH_HOST": config.STASH_HOST,
             "STASH_PORT": config.STASH_PORT,
             "STASH_ROOT_DIR": config.STASH_ROOT_DIR,
+            "DOWNLOAD_PRIVATE_ON_TRANSMISSION_ONLY": config.DOWNLOAD_PRIVATE_ON_TRANSMISSION_ONLY,
+            "DOWNLOAD_HOME_VIDEOS_TYPE_ON_TRANSMISSION": config.DOWNLOAD_HOME_VIDEOS_TYPE_ON_TRANSMISSION,
+            "DOWNLOAD_NO_TYPE_ON_TRANSMISSION": config.DOWNLOAD_NO_TYPE_ON_TRANSMISSION,
+            "DOWNLOAD_MOVIE_TYPE_ON_TRANSMISSION": config.DOWNLOAD_MOVIE_TYPE_ON_TRANSMISSION,
+            "DOWNLOAD_MOVIE_SERIES_TYPE_ON_TRANSMISSION": config.DOWNLOAD_MOVIE_SERIES_TYPE_ON_TRANSMISSION,
+            "DOWNLOAD_AUDIOBOOKS_TYPE_ON_TRANSMISSION": config.DOWNLOAD_AUDIOBOOKS_TYPE_ON_TRANSMISSION,
+            "DOWNLOAD_EBOOKS_TYPE_ON_TRANSMISSION": config.DOWNLOAD_EBOOKS_TYPE_ON_TRANSMISSION,
+            "DOWNLOAD_OTHER_TYPE_ON_TRANSMISSION": config.DOWNLOAD_OTHER_TYPE_ON_TRANSMISSION,
         },
         "torrent_types": torrent_types,
     }
@@ -233,7 +251,7 @@ def get_torrent_log(request, id):
             {
                 "id": entry.id,
                 "message": entry.message,
-                "source": entry.source,
+                "source": model_to_dict(entry.source),
                 "level": entry.level.name,
                 "created_at": entry.created_at.isoformat(),
                 "torrent_id": id,
@@ -434,24 +452,27 @@ def get_arr(request, current=0, limit=20):
     )
 
 
-def get_logs(request, current=0, limit=20):
+def get_logs(request, current=0, limit=20, log_source_id=0):
     logger = logging.getLogger("torbox")
     if current < 0:
         current = 0
     if limit < 0:
         limit = 1
     logger.info("Loading logs")
+    query = ErrorLog.objects.all()
+    if log_source_id:
+        query = ErrorLog.objects.filter(source__id=log_source_id)
     logs = (
-        ErrorLog.objects.all()
-        .prefetch_related("torrenterrorlog_set")
+        query.prefetch_related("torrenterrorlog_set")
         .prefetch_related("level")
+        .prefetch_related("source")
         .order_by("-created_at")[current : current + limit]
     )
     logs = [
         {
             "id": entry.id,
             "message": entry.message,
-            "source": entry.source,
+            "source": model_to_dict(entry.source),
             "level": entry.level.name,
             "created_at": entry.created_at.isoformat(),
             "torrent_id": (
@@ -551,6 +572,15 @@ def save_config(request):
             config.USE_TRANSMISSION = result.get(
                 "USE_TRANSMISSION", config.USE_TRANSMISSION
             )
+            config.TRANSMISSION_SFTP_USER = result.get(
+                "TRANSMISSION_SFTP_USER", config.TRANSMISSION_SFTP_USER
+            )
+            config.TRANSMISSION_SFTP_PORT = result.get(
+                "TRANSMISSION_SFTP_PORT", config.TRANSMISSION_SFTP_PORT
+            )
+            config.TRANSMISSION_SFTP_HOST = result.get(
+                "TRANSMISSION_SFTP_HOST", config.TRANSMISSION_SFTP_HOST
+            )
             config.TRANSMISSION_HOST = result.get(
                 "TRANSMISSION_HOST", config.TRANSMISSION_HOST
             )
@@ -565,6 +595,46 @@ def save_config(request):
             )
             config.CLEAN_ACTIVE_DOWNLOADS_POLICY = result.get(
                 "CLEAN_ACTIVE_DOWNLOADS_POLICY", config.CLEAN_ACTIVE_DOWNLOADS_POLICY
+            )
+            config.SKIP_DOWNLOAD_FOR_NEXT_STATUS_CHECK_IN_TRANSMISSION = result.get(
+                "SKIP_DOWNLOAD_FOR_NEXT_STATUS_CHECK_IN_TRANSMISSION",
+                config.SKIP_DOWNLOAD_FOR_NEXT_STATUS_CHECK_IN_TRANSMISSION,
+            )
+            config.SKIP_DOWNLOAD_FOR_NEXT_STATUS_CHECK_IN_TORBOX = result.get(
+                "SKIP_DOWNLOAD_FOR_NEXT_STATUS_CHECK_IN_TORBOX",
+                config.SKIP_DOWNLOAD_FOR_NEXT_STATUS_CHECK_IN_TORBOX,
+            )
+            config.DOWNLOAD_PRIVATE_ON_TRANSMISSION_ONLY = result.get(
+                "DOWNLOAD_PRIVATE_ON_TRANSMISSION_ONLY",
+                config.DOWNLOAD_PRIVATE_ON_TRANSMISSION_ONLY,
+            )
+            config.DOWNLOAD_HOME_VIDEOS_TYPE_ON_TRANSMISSION = result.get(
+                "DOWNLOAD_HOME_VIDEOS_TYPE_ON_TRANSMISSION",
+                config.DOWNLOAD_HOME_VIDEOS_TYPE_ON_TRANSMISSION,
+            )
+            config.DOWNLOAD_NO_TYPE_ON_TRANSMISSION = result.get(
+                "DOWNLOAD_NO_TYPE_ON_TRANSMISSION",
+                config.DOWNLOAD_NO_TYPE_ON_TRANSMISSION,
+            )
+            config.DOWNLOAD_MOVIE_TYPE_ON_TRANSMISSION = result.get(
+                "DOWNLOAD_MOVIE_TYPE_ON_TRANSMISSION",
+                config.DOWNLOAD_MOVIE_TYPE_ON_TRANSMISSION,
+            )
+            config.DOWNLOAD_MOVIE_SERIES_TYPE_ON_TRANSMISSION = result.get(
+                "DOWNLOAD_MOVIE_SERIES_TYPE_ON_TRANSMISSION",
+                config.DOWNLOAD_MOVIE_SERIES_TYPE_ON_TRANSMISSION,
+            )
+            config.DOWNLOAD_AUDIOBOOKS_TYPE_ON_TRANSMISSION = result.get(
+                "DOWNLOAD_AUDIOBOOKS_TYPE_ON_TRANSMISSION",
+                config.DOWNLOAD_AUDIOBOOKS_TYPE_ON_TRANSMISSION,
+            )
+            config.DOWNLOAD_EBOOKS_TYPE_ON_TRANSMISSION = result.get(
+                "DOWNLOAD_EBOOKS_TYPE_ON_TRANSMISSION",
+                config.DOWNLOAD_EBOOKS_TYPE_ON_TRANSMISSION,
+            )
+            config.DOWNLOAD_OTHER_TYPE_ON_TRANSMISSION = result.get(
+                "DOWNLOAD_OTHER_TYPE_ON_TRANSMISSION",
+                config.DOWNLOAD_OTHER_TYPE_ON_TRANSMISSION,
             )
             config.QUEUE_DIR = result.get("QUEUE_DIR", config.QUEUE_DIR)
             config.ARIA2_DIR = result.get("ARIA2_DIR", config.ARIA2_DIR)
@@ -596,6 +666,11 @@ def save_config(request):
             if result.get("TRANSMISSION_PASSWORD", None):
                 config.TRANSMISSION_PASSWORD = result.get("TRANSMISSION_PASSWORD", None)
                 result["TRANSMISSION_PASSWORD"] = "UPDATED"
+            if result.get("TRANSMISSION_SFTP_PASSWORD", None):
+                config.TRANSMISSION_SFTP_PASSWORD = result.get(
+                    "TRANSMISSION_SFTP_PASSWORD", None
+                )
+                result["TRANSMISSION_SFTP_PASSWORD"] = "UPDATED"
             if result.get("ARIA2_PASSWORD", None):
                 config.ARIA2_PASSWORD = result.get("ARIA2_PASSWORD", None)
                 result["ARIA2_PASSWORD"] = "UPDATED"
@@ -622,6 +697,47 @@ def save_config(request):
             return JsonResponse({"status": "Ok"}, safe=False)
         logger.warning(f"Wrong body in save_config: {body}")
     return JsonResponse({"error": "Invalid request"}, status=400)
+
+
+def force_finish_torrent(request, id):
+    logger = logging.getLogger("torbox")
+    try:
+        torrent = Torrent.objects.get(id=id)
+        status_mgr = StatusMgr.get_instance()
+        status_mgr.force_transition_in_done(torrent)
+        return JsonResponse({"status": "Ok"}, safe=False)
+    except Exception as e:
+        logger.error(f"Failed to finish torrent {id}: {e}")
+        return JsonResponse({"error": f"Failed to finish torrent: {id}"}, safe=False)
+
+
+def redownload_torrent_files(request, id):
+    logger = logging.getLogger("torbox")
+    try:
+        torrent = Torrent.objects.get(id=id)
+        status_mgr = StatusMgr.get_instance()
+        if torrent.client == TORBOX_CLIENT:
+            from .tasks import torbox_request_torrent_files as request_torrent_files
+        elif torrent.client == TRANSMISSION_CLIENT:
+            from .tasks import (
+                transmission_request_torrent_files as request_torrent_files,
+            )
+        else:
+            raise Exception(f"Unknown client: {torrent.client} for torrent: {id}")
+        if status_mgr.force_transition_in_client_done(
+            torrent, request_torrent_files=request_torrent_files
+        ):
+            return JsonResponse({"status": "Ok"}, safe=False)
+        return JsonResponse(
+            {"error": f"Could not transition into client done status: {torrent.name}"},
+            safe=False,
+        )
+    except Exception as e:
+        logger.error(f"Failed to redownload torrent files for {id}: {e}")
+        return JsonResponse(
+            {"error": f"Failed to redownload torrent files for torrent id: {id}"},
+            safe=False,
+        )
 
 
 def validate_stash(request):
@@ -777,21 +893,32 @@ def validate_transmission(request):
             TRANSMISSION_PASSWORD = result.get(
                 "TRANSMISSION_PASSWORD", config.TRANSMISSION_PASSWORD
             )
-            if not Path(TRANSMISSION_DIR).exists():
-                logger.error(f"TRANSMISSION_DIR: {TRANSMISSION_DIR} does not exist")
-                return JsonResponse(
-                    {
-                        "error": f"Transmission validation failed: TRANSMISSION_DIR: {TRANSMISSION_DIR} doesn't exist or is not accessible",
-                        "reason": 1,
-                    },
-                    safe=False,
-                )
-            ok, response, reason = validate_transmission_api(
-                TRANSMISSION_HOST,
-                TRANSMISSION_PORT,
-                TRANSMISSION_USER,
-                TRANSMISSION_PASSWORD,
+            TRANSMISSION_SFTP_HOST = result.get(
+                "TRANSMISSION_SFTP_HOST", config.TRANSMISSION_SFTP_HOST
             )
+            TRANSMISSION_SFTP_PORT = result.get(
+                "TRANSMISSION_SFTP_PORT", config.TRANSMISSION_SFTP_PORT
+            )
+            TRANSMISSION_SFTP_USER = result.get(
+                "TRANSMISSION_SFTP_USER", config.TRANSMISSION_SFTP_USER
+            )
+            TRANSMISSION_SFTP_PASSWORD = result.get(
+                "TRANSMISSION_SFTP_PASSWORD", config.TRANSMISSION_SFTP_PASSWORD
+            )
+            from .tasks import validate_transmission_settings_task, wait_for_task
+
+            result = validate_transmission_settings_task.enqueue(
+                host=TRANSMISSION_HOST,
+                port=TRANSMISSION_PORT,
+                user=TRANSMISSION_USER,
+                password=TRANSMISSION_PASSWORD,
+                dir=TRANSMISSION_DIR,
+                sftp_host=TRANSMISSION_SFTP_HOST,
+                sftp_password=TRANSMISSION_SFTP_PASSWORD,
+                sftp_port=TRANSMISSION_SFTP_PORT,
+                sftp_user=TRANSMISSION_SFTP_USER,
+            )
+            ok, response, reason = wait_for_task(result)
 
             logger.info(f"Transmission validation: {ok}, {response}")
             if ok:
@@ -879,8 +1006,22 @@ def get_search_results(request, query, season=0, episode=0):
     )
 
 
-def get_torrents():
-    torrent_with_latest_details = get_active_torrents_with_formatted_age()
+def get_torrents(
+    current: int = 0,
+    limit: int = 50,
+    state_id: int = 0,
+    torrent_type_id: int = 0,
+    client: str = "",
+    private=False,
+    name: str = "",
+):
+    if client == "ALL":
+        client = ""
+    if private == "ALL":
+        private = None
+    torrent_with_latest_details = get_active_torrents_with_formatted_age(
+        current, limit, state_id, torrent_type_id, client, private, name
+    )
     result = []
     summary = {"down": 0, "up": 0}
     for torrent_instance in torrent_with_latest_details:
@@ -933,10 +1074,45 @@ def get_torrent_type_list(request):
     return JsonResponse({"error": "Invalid request method"}, status=400)
 
 
-def get_torrent_list(request):
+def get_log_sources_list(request):
     logger = logging.getLogger("torbox")
     if request.method == "GET":
-        result, summary = get_torrents()
+        log_sources = [
+            model_to_dict(entry) for entry in LogSource.objects.all().order_by("name")
+        ]
+        log_sources.insert(0, {"id": 0, "name": "ALL"})
+        logger.info(f"Returning log sources: {log_sources}")
+        return JsonResponse({"log_sources": log_sources}, safe=False)
+    return JsonResponse({"error": "Invalid request method"}, status=400)
+
+
+def get_torrent_status_list(request):
+    logger = logging.getLogger("torbox")
+    if request.method == "GET":
+        torrent_states = [
+            model_to_dict(entry) for entry in TorrentStatus.objects.all().order_by("id")
+        ]
+        torrent_states.insert(0, {"id": 0, "name": "ALL"})
+        logger.info(f"Returning torrent status: {torrent_states}")
+        return JsonResponse({"torrent_status": torrent_states}, safe=False)
+    return JsonResponse({"error": "Invalid request method"}, status=400)
+
+
+def get_torrent_list(
+    request,
+    current: int,
+    limit: int,
+    state_id: int,
+    torrent_type_id: int,
+    client: str = "",
+    private: bool = False,
+    name: str = "",
+):
+    logger = logging.getLogger("torbox")
+    if request.method == "GET":
+        result, summary = get_torrents(
+            current, limit, state_id, torrent_type_id, client, private, name
+        )
         torrent_types = [model_to_dict(entry) for entry in TorrentType.objects.all()]
         return JsonResponse(
             {
@@ -950,10 +1126,58 @@ def get_torrent_list(request):
     return JsonResponse({"error": "Invalid request method"}, status=400)
 
 
+def get_allowed_client(entry: TorrentQueue):
+    if not config.USE_TRANSMISSION:
+        return TORBOX_CLIENT
+    if (
+        entry.torrent_private
+        and config.DOWNLOAD_PRIVATE_ON_TRANSMISSION_ONLY
+        and config.USE_TRANSMISSION
+    ):
+        return TRANSMISSION_CLIENT
+    if entry.torrent_type:
+        if (
+            entry.torrent_type.name == "No Type"
+            and not config.DOWNLOAD_NO_TYPE_ON_TRANSMISSION
+        ):
+            return TORBOX_CLIENT
+        if (
+            entry.torrent_type.name == "Home Videos"
+            and not config.DOWNLOAD_HOME_VIDEOS_TYPE_ON_TRANSMISSION
+        ):
+            return TORBOX_CLIENT
+        if (
+            entry.torrent_type.name == "Movies"
+            and not config.DOWNLOAD_MOVIE_TYPE_ON_TRANSMISSION
+        ):
+            return TORBOX_CLIENT
+        if (
+            entry.torrent_type.name == "Movie Series"
+            and not config.DOWNLOAD_MOVIE_SERIES_TYPE_ON_TRANSMISSION
+        ):
+            return TORBOX_CLIENT
+        if (
+            entry.torrent_type.name == "Audiobooks"
+            and not config.DOWNLOAD_AUDIOBOOKS_TYPE_ON_TRANSMISSION
+        ):
+            return TORBOX_CLIENT
+        if (
+            entry.torrent_type.name == "Ebooks"
+            and not config.DOWNLOAD_EBOOKS_TYPE_ON_TRANSMISSION
+        ):
+            return TORBOX_CLIENT
+        if (
+            entry.torrent_type.name == "Other"
+            and not config.DOWNLOAD_OTHER_TYPE_ON_TRANSMISSION
+        ):
+            return TORBOX_CLIENT
+    return f"{TRANSMISSION_CLIENT}/{TORBOX_CLIENT}"
+
+
 def api_get_active_queue(request):
     logger = logging.getLogger("torbox")
     if request.method == "GET":
-        result = get_active_queue()
+        result = get_active_queue(all=True)
         queue = [
             {
                 "id": entry.id,
@@ -962,6 +1186,7 @@ def api_get_active_queue(request):
                 "added_at": entry.added_at.isoformat(),
                 "priority": entry.priority,
                 "torrent_type_id": entry.torrent_type.id,
+                "allowed_client": get_allowed_client(entry),
             }
             for entry in result
         ]

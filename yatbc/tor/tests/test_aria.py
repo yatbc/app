@@ -103,6 +103,7 @@ class AriaApiTests(TestCase):
             status="",
             internal_id=aria_id,
         )
+        _ = create_torrent_file(create_torrent(self.test_type), aria=aria)
 
         json_result = json.loads(
             '{"completedLength":"11","dir":"/aria2","downloadSpeed":"0","files":[{"completedLength":"11","index":"1","length":"120","path":"/aria2/a.a","selected":"true"}],"gid":"12345","status":"active","totalLength":"120"}'

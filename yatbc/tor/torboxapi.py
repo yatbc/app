@@ -9,19 +9,18 @@ from .commondao import (
     mark_deleted_torrents,
     TORBOX_CLIENT,
     TRANSMISSION_CLIENT,
-    prepare_torrent_dir_name,
     add_log,
     torrent_file_to_log,
     torrent_to_log,
     clean_html,
     map_torbox_entry_to_torrent,
     map_torbox_entry_to_torrent_history,
+    get_active_torbox_downloads,
+    add_to_queue_by_magnet,
 )
 from datetime import date, timedelta
-from .ariaapi import AriaApi
 import requests
 from constance import config
-from .queuemgr import add_to_queue_by_magnet
 
 
 class TorBoxApi:
@@ -81,7 +80,7 @@ class TorBoxApi:
             add_log(
                 message=f"Could not get user data to read download slots: {format_log_value(e)}, assuming 3",
                 level=Level.objects.get_error(),
-                source="torboxapi",
+                source=LogSource.objects.get_torbox_api(),
             )
         return 3
 
@@ -99,7 +98,7 @@ class TorBoxApi:
             add_log(
                 message=f"Could not add torrent: {format_log_value(e)}",
                 level=Level.objects.get_error(),
-                source="torboxapi",
+                source=LogSource.objects.get_torbox_api(),
             )
         return None
 
@@ -137,7 +136,7 @@ class TorBoxApi:
             add_log(
                 message=f"Could not change torrent: {torrent_to_log(torrent)}, {action}: {e}",
                 level=Level.objects.get_error(),
-                source="torboxapi",
+                source=LogSource.objects.get_torbox_api(),
                 torrent=torrent,
             )
             return False
@@ -161,7 +160,7 @@ class TorBoxApi:
         add_log(
             message=f"Could not get result from torbox search api for query: <i>'{clean_html(query)}'</i>: reason: <i>'{clean_html(result.reason)}'</i>",
             level=Level.objects.get_error(),
-            source="torboxapi",
+            source=LogSource.objects.get_torbox_api(),
         )
         return None
 
@@ -169,7 +168,7 @@ class TorBoxApi:
         try:
             result = self.sdk.torrents.get_torrent_list(
                 api_version=self.version,
-                bypass_cache="True",  # ,
+                bypass_cache="True",  # if it will start failing with to many results, set it to False
                 # id_="integer",
                 # offset="integer",
                 # limit="integer"
@@ -179,7 +178,7 @@ class TorBoxApi:
                 add_log(
                     message=f"Failed to access tor api: {clean_html(result.error)}",
                     level=Level.objects.get_error(),
-                    source="torboxapi",
+                    source=LogSource.objects.get_torbox_api(),
                 )
                 return None
             if result.success:
@@ -191,7 +190,7 @@ class TorBoxApi:
             add_log(
                 message=f"Could not get torrents: {clean_html(e)}",
                 level=Level.objects.get_error(),
-                source="torboxapi",
+                source=LogSource.objects.get_torbox_api(),
             )
             return None
         return None
@@ -208,7 +207,7 @@ class TorBoxApi:
                 add_log(
                     message=f"Could not request download link for torrent {torrent_to_log(torrent)} file {torrent_file_to_log(file)}: <i>'{clean_html(result.error)}'</i>",
                     level=Level.objects.get_error(),
-                    source="torboxapi",
+                    source=LogSource.objects.get_torbox_api(),
                     torrent=torrent,
                 )
                 return None
@@ -217,7 +216,7 @@ class TorBoxApi:
             add_log(
                 message=f"Could not request download link for torrent {torrent_to_log(torrent)} file {torrent_file_to_log(file)}: {clean_html(e)}",
                 level=Level.objects.get_error(),
-                source="torboxapi",
+                source=LogSource.objects.get_torbox_api(),
                 torrent=torrent,
             )
             return None
@@ -233,7 +232,7 @@ def update_available_slots(api=None, force=False):
         or force
     ):
         config.MAX_DOWNLOAD_TORBOX_SLOTS = api.get_max_download_slots()
-        config.NEXT_MAX_DOWNLOAD_TORBOX_SLOTS_CHECK = date.today() + timedelta(days=7)
+        config.NEXT_MAX_DOWNLOAD_TORBOX_SLOTS_CHECK = date.today() + timedelta(days=1)
 
 
 def search_torrent(query, season, episode, api=None) -> TorrentTorBoxSearch | None:
@@ -322,7 +321,7 @@ def search_torrent(query, season, episode, api=None) -> TorrentTorBoxSearch | No
                 add_log(
                     message=f"Torrent: {torrent_to_log(torrent_search_result.torrent)} already exists in search for: <i>'{clean_html(query)}'</i>",
                     level=Level.objects.get_info(),
-                    source="torboxapi",
+                    source=LogSource.objects.get_torbox_api(),
                     torrent=torrent_search_result.torrent,
                 )
         new_search_results.append(torrent_search_result)
@@ -330,11 +329,7 @@ def search_torrent(query, season, episode, api=None) -> TorrentTorBoxSearch | No
     return torrent_search
 
 
-def get_active_torbox_downloads():
-    return Torrent.objects.filter(deleted=False).count()
-
-
-def get_free_download_slots(api=None):
+def get_free_torbox_download_slots(api=None):
     update_available_slots(api=api, force=False)
     return config.MAX_DOWNLOAD_TORBOX_SLOTS - get_active_torbox_downloads()
 
@@ -342,7 +337,7 @@ def get_free_download_slots(api=None):
 def have_free_download_slot(api=None):
     if not api:
         api = TorBoxApi()
-    return get_free_download_slots(api) > 0
+    return get_free_torbox_download_slots(api) > 0
 
 
 def add_torrent_by_data(torrent_type, magnet=None, blob=None, private=False, api=None):
@@ -385,7 +380,9 @@ def add_torrent_by_magnet(magnet, torrent_type_id, api=None, skip_queue_add=Fals
     return add_torrent_by_data(magnet=magnet, torrent_type=torrent_type, api=api), None
 
 
+# todo: refactor to use eider torbox or transmission
 def add_torrent_from_queue(queue: TorrentQueue, api=None):
+
     if not api:
         api = TorBoxApi()
 
@@ -424,133 +421,19 @@ def add_torrent(query_search_id):
         add_log(
             message=f"Torrent {torrent_to_log(torrent)} with hash: {format_log_value(torrent.hash)} was added from search result: {format_log_value(result.query)}",
             level=Level.objects.get_info(),
-            source="torboxapi",
+            source=LogSource.objects.get_torbox_api(),
             torrent=torrent,
         )
     if queue:
         add_log(
             message=f"Torrent was added to internal queue {queue.id} from search result: {format_log_value(result.query)}",
             level=Level.objects.get_info(),
-            source="torboxapi",
+            source=LogSource.objects.get_torbox_api(),
         )
-
-
-def request_dl(torrent_id, api=None, aria_api=None):
-    logger = logging.getLogger("torbox")
-
-    def validate_torrent(torrent_id):
-        try:
-            torrent = Torrent.objects.get(
-                pk=torrent_id, client=TORBOX_CLIENT, download_finished=True
-            )
-            if not torrent.internal_id:
-                logger.error(f"Torrent have no internal id: {torrent}")
-                add_log(
-                    message=f"Torrent have no internal id: {torrent_to_log(torrent)}",
-                    level=Level.objects.get_error(),
-                    source="torboxapi",
-                    torrent=torrent,
-                )
-                return None
-            return torrent
-        except Exception as e:
-            logger.warning(
-                f"Can not find torrent to download: {torrent_id} for {TORBOX_CLIENT} and finished download"
-            )
-            add_log(
-                message=f"Can not find torrent to download: {torrent_id} for {TORBOX_CLIENT} and finished download",
-                level=Level.objects.get_warning(),
-                source="torboxapi",
-            )
-            return None
-
-    def validate_files(torrent_files):
-        result = []
-        for file in torrent_files:
-            logger.debug(file)
-            if not file.internal_id:
-                logger.error(f"Torrent file: {file} has no internal id, stopping")
-                add_log(
-                    message=f"Torrent file: {torrent_file_to_log(file)} has no internal id",
-                    level=Level.objects.get_error(),
-                    source="torboxapi",
-                    torrent=torrent,
-                )
-                return []
-            if file.aria:
-                logger.info(f"Torrent file: {file} already has aria id")
-                add_log(
-                    message=f"Torrent file: {torrent_file_to_log(file)} already has aria id",
-                    level=Level.objects.get_info(),
-                    source="torboxapi",
-                    torrent=torrent,
-                )
-                continue
-            logger.info(
-                f"torrent_id: {torrent.internal_id}, file_id: {file.internal_id}"
-            )
-            result.append(file)
-        return result
-
-    status_mgr = StatusMgr.get_instance()
-    torrent = validate_torrent(torrent_id=torrent_id)
-    if not torrent:
-        return
-    logger.info(f"Torrent to local download: {torrent}")
-    torrent_files = TorrentFile.objects.filter(torrent=torrent)
-    files = validate_files(torrent_files=torrent_files)
-    if not files:
-        return
-    if not api:
-        api = TorBoxApi()
-    if not aria_api:
-        aria_api = AriaApi()
-    request_data = []
-    for file in files:
-        result = api.request_download_link(torrent=torrent, file=file)
-        logger.debug(result)
-        if not result:
-            logger.warning(
-                f"Requesting link for torrent id: {torrent.id} failed, trying again"
-            )
-            result = api.request_download_link(torrent=torrent, file=file)
-            if not result:
-                status_mgr.remote_client_error(torrent)
-                return
-        request_data.append(
-            {
-                "url": result,
-                "path": f"{config.ARIA2_DIR}/{prepare_torrent_dir_name(torrent.name)}",
-                "file": file,
-            }
-        )
-
-    # fixme: in case of an error, do we want to do something about files that already were requested? Aria is probably down, so not here.
-    for request in request_data:
-        url = request["url"]
-        path = request["path"]
-        file = request["file"]
-        ok, aria_id = aria_api.download_file(
-            link=url, target_name=file.short_name, target_folder=path, torrent=torrent
-        )
-        if not ok:
-            logger.error(f"Could not request Aria to download file: {url}, stopping")
-            return
-        aria_download_status = AriaDownloadStatus.objects.create(
-            internal_id=aria_id, path=path
-        )
-        file.aria = aria_download_status
-        file.save()
-        add_log(
-            message=f"Torrent file: {torrent_file_to_log(file)} for torrent: {torrent_to_log(torrent)} send to Aria for download with id: <i>'{aria_id}'</i> and path: <i>'{path}'</i>",
-            level=Level.objects.get_info(),
-            source="torboxapi",
-            torrent=torrent,
-        )
-    status_mgr.aria_new(torrent)
 
 
 def delete_torrent(torrent_id, api=None):
+
     if not api:
         api = TorBoxApi()
     return change_torrent(torrent_id=torrent_id, action="delete", api=api)
@@ -573,7 +456,7 @@ def change_torrent(torrent_id, action, api=None):
     add_log(
         message=f"Torrent: {torrent_to_log(torrent)} changed: {action}",
         level=Level.objects.get_info(),
-        source="torboxapi",
+        source=LogSource.objects.get_torbox_api(),
         torrent=torrent,
     )
     return True
@@ -621,7 +504,7 @@ def validate_api(api, host, key):
     return False, "Failed to validate TorBox API. Check your API key.", WRONG_KEY
 
 
-def update_torrent_list(api=None):
+def update_torrent_list(api=None, request_files_task=None):
     if not api:
         api = TorBoxApi()
     no_type = TorrentType.objects.get(name="No Type")
@@ -636,11 +519,7 @@ def update_torrent_list(api=None):
     for entry in data:
         new_torrent = map_torbox_entry_to_torrent(entry, no_type=no_type)
         torrent = update_torrent(new_torrent)
-        if (
-            not TorrentHistory.objects.filter(torrent=torrent).exists()
-            or torrent.local_status == status_mgr.client_added
-        ):
-            status_mgr.remote_client_progress(torrent)
+        status_mgr.transition_in_client_progress_if_needed(torrent)
         previous_activity = TorrentHistory.objects.filter(
             torrent=torrent, updated_at=entry.updated_at
         )
@@ -651,7 +530,6 @@ def update_torrent_list(api=None):
             torrent_history.save()
         else:
             logger.debug("Torrent wasn't active from last check")
-        download_requested = False
         files = TorrentFile.objects.filter(torrent=torrent)
         if entry.files and not files:
             logger.debug(f"Filling files for: {torrent.name}")
@@ -667,18 +545,12 @@ def update_torrent_list(api=None):
                     internal_id=file.id_,
                 )
 
-            if torrent.download_finished:
-                status_mgr.remote_client_done(torrent)
-                download_requested = True
-        if (  # refactor to use same code as request_dl
-            torrent.download_finished
-            and not any([file.aria for file in files])
-            and not download_requested
-        ):
-            logger.warning(
-                f"Torrent {torrent.id} has no aria links but it's done on client site. It is possible, that client failed to respond with link. Will try again."
-            )
-            status_mgr.remote_client_done(torrent)
+        status_mgr.transition_in_client_done_if_needed(
+            torrent,
+            files,
+            request_torrent_files=request_files_task,
+        )
 
         not_deleted.append(torrent)
     mark_deleted_torrents(not_deleted, clients=[TRANSMISSION_CLIENT])
+    config.SKIP_DOWNLOAD_FOR_NEXT_STATUS_CHECK_IN_TORBOX = False

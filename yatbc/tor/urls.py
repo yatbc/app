@@ -9,7 +9,7 @@ urlpatterns = [
     path("api/save_config", views.save_config, name="save_config"),
     path("api/get_logs", views.get_logs, name="get_logs"),
     path(
-        "api/get_logs/<int:current>/<int:limit>",
+        "api/get_logs/<int:current>/<int:limit>/<int:log_source_id>",
         views.get_logs,
         name="get_logs_paginated",
     ),
@@ -65,9 +65,24 @@ urlpatterns = [
         name="search_torrent",
     ),
     path(
+        "api/force_finish_torrent/<int:id>",
+        views.force_finish_torrent,
+        name="force_finish_torrent",
+    ),
+    path(
+        "api/redownload_torrent_files/<int:id>",
+        views.redownload_torrent_files,
+        name="redownload_torrent_files",
+    ),
+    path(
         "api/get_torrent_type_list",
         views.get_torrent_type_list,
         name="get_torrent_types",
+    ),
+    path(
+        "api/get_log_sources_list",
+        views.get_log_sources_list,
+        name="get_log_sources_list",
     ),
     path(
         "api/update_torrent_type/<int:torrent_id>/<int:torrent_type_id>",
@@ -78,7 +93,21 @@ urlpatterns = [
     path(
         "api/update_torrent_list", views.update_torrent_list, name="update_torrent_list"
     ),
-    path("api/get_torrents_list", views.get_torrent_list, name="get_torrents_list"),
+    path(
+        "api/get_torrents_list/<int:current>/<int:limit>/<int:state_id>/<int:torrent_type_id>/<client>/<private>/<name>",
+        views.get_torrent_list,
+        name="get_torrents_list",
+    ),
+    path(
+        "api/get_torrents_list/<int:current>/<int:limit>/<int:state_id>/<int:torrent_type_id>/<client>/<private>",
+        views.get_torrent_list,
+        name="get_torrents_list",
+    ),
+    path(
+        "api/get_torrent_status_list",
+        views.get_torrent_status_list,
+        name="get_torrent_status_list",
+    ),
     path(
         "api/change_torrent/<action>/<int:id>",
         views.change_torrent_api,

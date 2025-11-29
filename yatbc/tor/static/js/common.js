@@ -274,12 +274,13 @@ function commonPagination() {
     step: 20,
     paginatedPageApi: "",
     pageCurrentItems: 0,
+    extraFilter: "",
     paginationNewDataCallback: () => { },
     paginationErrorCallback: () => { },
     ...commonCallApi(),
     loadPreviousPageCallback() {
       this.currentIndex -= this.step;
-      api = this.paginatedPageApi + "/" + this.currentIndex + "/" + this.step
+      api = this.paginatedPageApi + "/" + this.currentIndex + "/" + this.step + this.extraFilter
       this.callApi(
         api,
         "",
@@ -291,7 +292,7 @@ function commonPagination() {
     },
     loadNextPageCallback() {
       this.currentIndex += this.step;
-      api = this.paginatedPageApi + "/" + this.currentIndex + "/" + this.step
+      api = this.paginatedPageApi + "/" + this.currentIndex + "/" + this.step + this.extraFilter
       this.callApi(
         api,
         "",
@@ -302,7 +303,7 @@ function commonPagination() {
         this.paginationNewDataCallback);
     },
     reloadPagination() {
-      api = this.paginatedPageApi + "/" + this.currentIndex + "/" + this.step
+      api = this.paginatedPageApi + "/" + this.currentIndex + "/" + this.step + this.extraFilter
       this.callApi(
         api,
         "",

@@ -13,3 +13,4 @@ django_venv/
 .dev_env
 .env
 run_test.sh
+.coverage

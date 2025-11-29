@@ -35,11 +35,44 @@ class Level(models.Model):
     objects = LevelManager()
 
 
+class LogSourceManager(models.Manager):
+
+    def get_action(self):
+        return get_value(self, "action")
+
+    def get_action_mgr(self):
+        return get_value(self, "actionmgr")
+
+    def get_aria_api(self):
+        return get_value(self, "ariaapi")
+
+    def get_arr_manager(self):
+        return get_value(self, "arrmanager")
+
+    def get_queue_mgr(self):
+        return get_value(self, "queuemgr")
+
+    def get_status_mgr(self):
+        return get_value(self, "statusmgr")
+
+    def get_torbox_api(self):
+        return get_value(self, "torboxapi")
+
+    def get_transmission_api(self):
+        return get_value(self, "transmissionapi")
+
+
+class LogSource(models.Model):
+    name = models.CharField(max_length=100)
+
+    objects = LogSourceManager()
+
+
 class ErrorLog(models.Model):
     message = models.TextField()
     created_at = models.DateTimeField(auto_now_add=True)
     level = models.ForeignKey(Level, on_delete=models.CASCADE)
-    source = models.CharField(max_length=100, null=True, blank=True, default=None)
+    source = models.ForeignKey(LogSource, on_delete=models.CASCADE, null=True)
 
 
 class TorrentStatus(models.Model):
@@ -66,6 +99,9 @@ class TorrentTypeManager(models.Manager):
     def get_home_video(self):
         return get_value(self, "Home Videos")
 
+    def get_ebooks(self):
+        return get_value(self, "E-Books")
+
 
 class TorrentType(models.Model):
     ACTION_DO_NOTHING = "Nothing"
@@ -76,6 +112,16 @@ class TorrentType(models.Model):
     target_dir = models.TextField(null=True, blank=True, default=None)
 
     objects = TorrentTypeManager()
+
+
+class ArrBase(models.Model):
+    added_at = models.DateTimeField(auto_now_add=True)
+    last_checked = models.DateTimeField(null=True, blank=True, default=None)
+    last_found = models.DateTimeField(null=True, blank=True, default=None)
+    active = models.BooleanField(default=True)
+    torrent_type = models.ForeignKey(TorrentType, on_delete=models.CASCADE)
+    include_words = models.TextField(null=True, blank=True, default=None)
+    exclude_words = models.TextField(null=True, blank=True, default=None)
 
 
 class Torrent(models.Model):
@@ -105,6 +151,7 @@ class Torrent(models.Model):
     finished_at = models.DateTimeField(default=None, null=True)
     cached = models.BooleanField(default=False)  # was cached on remote client?
     private = models.BooleanField(default=False)  # is from private tracker
+    arr = models.ForeignKey(ArrBase, on_delete=models.SET_NULL, null=True)
 
 
 class TorrentQueue(models.Model):
@@ -220,25 +267,6 @@ class TorrentTorBoxSearchResult(models.Model):
     )
 
     objects = TorrentTorBoxSearchResultManager()
-
-
-class ArrBase(models.Model):
-    added_at = models.DateTimeField(auto_now_add=True)
-    last_checked = models.DateTimeField(null=True, blank=True, default=None)
-    last_found = models.DateTimeField(null=True, blank=True, default=None)
-    active = models.BooleanField(default=True)
-
-    last_added_torrent = models.OneToOneField(
-        Torrent,
-        null=True,
-        blank=True,
-        default=None,
-        on_delete=models.SET_NULL,
-        related_name="arr_last_added",
-    )
-    torrent_type = models.ForeignKey(TorrentType, on_delete=models.CASCADE)
-    include_words = models.TextField(null=True, blank=True, default=None)
-    exclude_words = models.TextField(null=True, blank=True, default=None)
 
 
 class ArrMovieSeries(ArrBase):

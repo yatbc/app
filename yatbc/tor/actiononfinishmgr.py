@@ -1,4 +1,11 @@
-from .models import Torrent, TorrentFile, TorrentType, TorrentTorBoxSearchResult, Level
+from .models import (
+    Torrent,
+    TorrentFile,
+    TorrentType,
+    TorrentTorBoxSearchResult,
+    Level,
+    LogSource,
+)
 from .statusmgr import StatusMgr
 import logging
 import abc
@@ -111,14 +118,14 @@ class StashRescanExitHandler(ActionHandler):
                 add_log(
                     message=f"Stash rescan for folder: {format_log_value(folder)} started",
                     level=Level.objects.get_info(),
-                    source="action",
+                    source=LogSource.objects.get_action(),
                     torrent=action.torrent,
                 )
             else:
                 add_log(
                     message=f"Could not start Stash rescan for folder: {format_log_value(folder)}",
                     level=Level.objects.get_error(),
-                    source="action",
+                    source=LogSource.objects.get_action(),
                     torrent=action.torrent,
                 )
             return True
@@ -197,7 +204,7 @@ class ActionCopy(Action):
         add_log(
             message=f"Target file already exists: <i>'{target_path}'</i>, skipping action execution for this file",
             level=Level.objects.get_warning(),
-            source="action",
+            source=LogSource.objects.get_action(),
             torrent=self.torrent,
         )
 
@@ -232,7 +239,7 @@ class ActionMove(ActionCopy):
         add_log(
             message=f"Source file {format_log_value(source)} removed after move action, because target file already exists: {format_log_value(target)} for torrent: {torrent_to_log(self.torrent)}",
             level=Level.objects.get_warning(),
-            source="action",
+            source=LogSource.objects.get_action(),
             torrent=self.torrent,
         )
 
@@ -269,7 +276,6 @@ def get_metadata_by_file(file_name: str, title=None, season=None, episode=None):
     name = Path(file_name).stem
     result = re.search(r"s(eason){0,1}\s*(\d+)\s*e(pisode)*\s*(\d+)", name.lower())
     if result and title is None:
-        print(result.group())
         title = name[0 : result.start()]
         title = clean_title(title.strip())
     if result and season is None:
@@ -290,7 +296,7 @@ def get_metadata_by_search(
     torbox_search: TorrentTorBoxSearchResult, title=None, season=None, episode=None
 ):
     if not torbox_search:
-        return title, season, episode, None
+        return title, season, episode, None, None
 
     query = torbox_search.query
     result = query.query.split("/")
@@ -311,10 +317,11 @@ def get_metadata_by_search(
         episode = int(torbox_search.episode)
     logger = logging.getLogger("torbox")
     title = torbox_search.title
+    resolution = torbox_search.resolution
     logger.debug(
-        f"Extracted metadata from search, title: {title}, season: {season}, episode: {episode}"
+        f"Extracted metadata from search, title: {title}, season: {season}, episode: {episode}, resolution: {resolution}"
     )
-    return torbox_search.title, season, episode, imdbid
+    return torbox_search.title, season, episode, imdbid, resolution
 
 
 def pad_number(number):
@@ -368,7 +375,9 @@ def find_existing_dir(
     return None
 
 
-def normalize_movie_series_file_name(file_name, title=None, season=None, episode=None):
+def normalize_movie_series_file_name(
+    file_name, title=None, season=None, episode=None, resolution=None
+):
     if not title:
         return file_name
     normalized = title.title()
@@ -376,12 +385,16 @@ def normalize_movie_series_file_name(file_name, title=None, season=None, episode
         normalized += f" S{pad_number(season)}"
     if episode:
         normalized += f"E{pad_number(episode)}"
+    if resolution:
+        normalized += " " + resolution
     normalized = normalized + Path(file_name).suffix
     return normalized
 
 
-def normalize_moves_file_name(file_name, title=None):
-    return normalize_movie_series_file_name(file_name=file_name, title=title)
+def normalize_movies_file_name(file_name, title=None, resolution=None):
+    return normalize_movie_series_file_name(
+        file_name=file_name, title=title, resolution=resolution
+    )
 
 
 def is_known_movie_type(file: TorrentFile):
@@ -423,7 +436,9 @@ class MoviesEnterHandler(ActionHandler):
         if not torbox_search:
             self.logger.debug(f"Torrent: {action.torrent} is not connected to search")
         title, _, _ = get_metadata_by_file(file_name=file_name)
-        title, _, _, imdbid = get_metadata_by_search(torbox_search, title, None, None)
+        title, _, _, imdbid, resolution = get_metadata_by_search(
+            torbox_search, title, None, None
+        )
 
         title = clean_title(title=title)
 
@@ -435,12 +450,12 @@ class MoviesEnterHandler(ActionHandler):
             None,
             imdbid,
         )
-        normalized_file_name = normalize_moves_file_name(file_name, title)
+        normalized_file_name = normalize_movies_file_name(file_name, title, resolution)
         if existing_dir:
             add_log(
                 f"Folder with movie from torrent: {torrent_to_log(action.torrent)} already existed, skipping organization. Existing dir: {format_log_value(existing_dir)}",
                 level=Level.objects.get_info(),
-                source="actionmgr",
+                source=LogSource.objects.get_action_mgr(),
                 torrent=action.torrent,
             )
             action.target_dir = existing_dir
@@ -455,7 +470,7 @@ class MoviesEnterHandler(ActionHandler):
             add_log(
                 f"Updating target path for movie. From: {format_log_value(old_target)}<br/> to new dir: {format_log_value(target_path)}",
                 level=Level.objects.get_info(),
-                source="actionmgr",
+                source=LogSource.objects.get_action_mgr(),
                 torrent=action.torrent,
             )
             action.target_dir = target_dir
@@ -463,7 +478,7 @@ class MoviesEnterHandler(ActionHandler):
         add_log(
             message=f"Could not find/build target folder for movie: title: {format_log_value(title)}, file_name: {format_log_value(file_name)}, imdbid: {format_log_value(imdbid)}",
             level=Level.objects.get_warning(),
-            source="actionmgr",
+            source=LogSource.objects.get_action_mgr(),
             torrent=action.file.torrent,
         )
         return None
@@ -476,7 +491,7 @@ class MoviesEnterHandler(ActionHandler):
                 add_log(
                     message=f"Could not find movie file in torrent: {torrent_to_log(action.torrent)}, skipping organization",
                     level=Level.objects.get_warning(),
-                    source="actionmgr",
+                    source=LogSource.objects.get_action_mgr(),
                     torrent=action.torrent,
                 )
                 return True
@@ -533,7 +548,7 @@ class MoveSeriesEnterHandler(ActionHandler):
         if not torbox_search:
             self.logger.debug(f"Torrent: {action.torrent} is not connected to search")
         title, season, episode = get_metadata_by_file(file_name=file_name)
-        title, season, episode, imdbid = get_metadata_by_search(
+        title, season, episode, imdbid, resolution = get_metadata_by_search(
             torbox_search, title, season, episode
         )
 
@@ -548,14 +563,14 @@ class MoveSeriesEnterHandler(ActionHandler):
             imdbid,
         )
         normalized_file_name = normalize_movie_series_file_name(
-            file_name, title, season, episode
+            file_name, title, season, episode, resolution
         )
         if existing_dir:
             target_path = existing_dir / normalized_file_name
             add_log(
                 f"Updating target path for movie series to existing dir:<br/> {format_log_value(target_path)}",
                 level=Level.objects.get_info(),
-                source="actionmgr",
+                source=LogSource.objects.get_action_mgr(),
                 torrent=action.torrent,
             )
             action.target_dir = existing_dir
@@ -570,7 +585,7 @@ class MoveSeriesEnterHandler(ActionHandler):
             add_log(
                 f"Updating target path for movie series to new dir:<br/> {format_log_value(target_path)}",
                 level=Level.objects.get_info(),
-                source="actionmgr",
+                source=LogSource.objects.get_action_mgr(),
                 torrent=action.torrent,
             )
             action.target_dir = target_dir
@@ -578,7 +593,7 @@ class MoveSeriesEnterHandler(ActionHandler):
         add_log(
             message=f"Could not find/build target folder for movie series: title: {format_log_value(title)}, file_name: {format_log_value(file_name)}, season: {format_log_value(season)}, episode: {format_log_value(episode)}, imdbid: {format_log_value(imdbid)}",
             level=Level.objects.warning(),
-            source="actionmgr",
+            source=LogSource.objects.get_action_mgr(),
             torrent=action.torrent,
         )
         return None
@@ -591,7 +606,7 @@ class MoveSeriesEnterHandler(ActionHandler):
                 add_log(
                     message=f"Could not find movie file in torrent: {torrent_to_log(action.torrent)}, skipping organization",
                     level=Level.objects.get_warning(),
-                    source="actionmgr",
+                    source=LogSource.objects.get_action_mgr(),
                     torrent=action.torrent,
                 )
                 return True
@@ -698,7 +713,7 @@ class ActionMgr:
             add_log(
                 message=f"File: {torrent_file_to_log(file)} is not done, skipping action execution for torrent: {torrent_to_log(file.torrent)}",
                 level=Level.objects.get_warning(),
-                source="actionmgr",
+                source=LogSource.objects.get_action_mgr(),
                 torrent=file.torrent,
             )
 
@@ -712,7 +727,7 @@ class ActionMgr:
             add_log(
                 message=f"File: {torrent_file_to_log(file)} does not exist at path: {format_log_value(source_path)}, skipping action execution for torrent: {torrent_to_log(file.torrent)}",
                 level=Level.objects.get_error(),
-                source="actionmgr",
+                source=LogSource.objects.get_action_mgr(),
                 torrent=file.torrent,
             )
             return False

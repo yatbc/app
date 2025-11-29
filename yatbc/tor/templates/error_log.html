@@ -15,9 +15,18 @@
     {% include 'includes/confirm.html' %}
     {% include 'includes/wait.html' %}
     {% include 'includes/pagination.html' %}
-    <div class="mb-3">
+    <div class="d-flex align-items-center gap-2">
       <button class="btn btn-primary ms-auto" @click="deleteLogs()">Delete logs older than 14 days</button>
       <button class="btn btn-danger ms-auto" @click="deleteLogs('all')">Delete all logs</button>
+      <label for="log_sources_filter" class="me-2">
+        Filter:
+      </label>
+      <select class="form-select" x-model="log_source_filter_id" @change="filter($event.target.value)"
+        id="log_sources_filter">
+        <template x-for="item in log_sources" :key="item.id">
+          <option :value="item.id" x-text="item.name"></option>
+        </template>
+      </select>
     </div>
     {% include 'includes/logs.html' %}
     <div class="mb-3">
