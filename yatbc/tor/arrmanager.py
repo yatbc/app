@@ -1,4 +1,4 @@
-from .models import ArrMovieSeries, TorrentTorBoxSearchResult, Torrent, Level
+from .models import ArrMovieSeries, TorrentTorBoxSearchResult, Torrent, Level, LogSource
 from django.db.models import Q, F, ExpressionWrapper, fields
 from django.utils import timezone
 from datetime import timedelta
@@ -8,7 +8,7 @@ from .commondao import add_log
 import logging
 import re
 
-SOURCE = "arrmanager"
+
 ANY = "any"  # special value for any quality or encoder
 
 
@@ -217,7 +217,7 @@ def process_arr(arr_id: int):
             add_log(
                 message=f"Could not find torrent for arr {arr.imdbid} {arr.title} S{arr.requested_season}E{arr.requested_episode} in over 9 days. Disabling arr.",
                 level=Level.objects.get_warning(),
-                source=SOURCE,
+                source=LogSource.objects.get_arr_manager(),
                 arr=arr,
             )
             return arr, False
@@ -231,7 +231,7 @@ def process_arr(arr_id: int):
             add_log(
                 message=f"Could not find torrent for arr {arr.imdbid} {arr.title} S{arr.requested_season-1}E{arr.requested_episode} in over 7 days. Moving to season {arr.requested_season}.",
                 level=Level.objects.get_info(),
-                source=SOURCE,
+                source=LogSource.objects.get_arr_manager(),
                 arr=arr,
             )
             return arr, False
@@ -240,7 +240,7 @@ def process_arr(arr_id: int):
         add_log(
             message=f"Could not find torrent for arr {arr.imdbid} {arr.title} S{arr.requested_season}E{arr.requested_episode} at this time. Will try tomorrow.",
             level=Level.objects.get_info(),
-            source=SOURCE,
+            source=LogSource.objects.get_arr_manager(),
             arr=arr,
         )
         return arr, False
@@ -261,21 +261,21 @@ def process_arr(arr_id: int):
         add_log(
             message=f"From arr {arr.imdbid} found full season: {best_match.raw_title}, switching to next one: S{arr.requested_season}/E{arr.requested_episode}",
             level=Level.objects.get_info(),
-            source=SOURCE,
+            source=LogSource.objects.get_arr_manager(),
             torrent=torrent,
             arr=arr,
         )
     arr.active = True
     arr.save()
     if torrent:
-        arr.last_added_torrent = torrent
-        arr.save()
+        torrent.arr = arr
+        torrent.save()
         best_match.torrent = torrent
         best_match.save()
         add_log(
             message=f"Added torrent {best_match.raw_title} from arr {arr.imdbid}, to fulfill request for: {request_text}",
             level=Level.objects.get_info(),
-            source=SOURCE,
+            source=LogSource.objects.get_arr_manager(),
             torrent=torrent,
             arr=arr,
         )
@@ -285,7 +285,7 @@ def process_arr(arr_id: int):
     add_log(
         message=f"Added torrent  {best_match.raw_title} from arr {arr.imdbid} to queue {queue.id}, to fulfill request for: {request_text}",
         level=Level.objects.get_info(),
-        source=SOURCE,
+        source=LogSource.objects.get_arr_manager(),
         arr=arr,
     )
     return arr, True

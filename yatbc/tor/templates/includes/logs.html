@@ -3,7 +3,7 @@
         <tr>
             <th scope="col" style="width: 200px;">Time</th>
             <th scope="col" style="width: 100px;">Level</th>
-            <th scope="col" style="width: 100px;">Source</th>
+            <th scope="col" style="width: 150px;">Source</th>
             <th scope="col">Message</th>
             <th scope="col" style="width: 100px;">Related torrent</th>
         </tr>
@@ -17,7 +17,7 @@
                     <td x-text="entry.created_at" class="text-break"></td>
                     <td :class="{'text-danger': entry.level == 'ERROR', 'text-success': entry.level == 'INFO', 'text-warning': entry.level == 'WARNING' } "
                         x-text="entry.level"></td>
-                    <td x-text="entry.source"></td>
+                    <td x-text="entry.source.name"></td>
                     <td x-html="entry.message" class="truncate-text-cell">
                     </td>
                     <td>

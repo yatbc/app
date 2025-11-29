@@ -30,15 +30,6 @@
       <strong>TLDR:</strong> YATBC automates workflow of using TorBox, downloading files to local drive and
       moving/coping them when done
     </p>
-    <h2>Main features:</h2>
-    <ul>
-      <li>Download files from the TorBox using Aria2.</li>
-      <li>Store downloaded files in folders according to your preferences.</li>
-      <li>Manages history, helps to determine if you already have "this" file.</li>
-      <li>Tries to inform the user about actions taken via logs related to files.</li>
-      <!--<li>Use Transmission as a backup client.</li>-->
-      <li>Basic functionality similar to common *arr stacks</li>
-    </ul>
     {% endif %}
 
     <ul class="nav nav-tabs" id="configTab" role="tablist">
@@ -88,6 +79,13 @@
           <input class="form-control" id="torbox_apikey" type="text" x-model="torbox_api_key_value"
             :class="{ 'is-invalid': torbox_api_valid === false, 'is-valid': torbox_api_valid === true }"
             :placeholder="configuration.TORBOX_API_KEY_SET ? 'TorBox API Key is set' : 'Please input TorBox API Key'" />
+        </div>
+        <div class="mb-3">
+          <label for="skip_download_on_next_status_check_torbox" class="form-label">
+            Skip download for next status check in TorBox(useful if you already downloaded them):
+          </label>
+          <input id="skip_download_on_next_status_check_torbox" type="checkbox"
+            x-model="configuration.SKIP_DOWNLOAD_FOR_NEXT_STATUS_CHECK_IN_TORBOX" />
         </div>
         <div class="mb-3">
           <label for="torbox_host" class="form-label">
@@ -149,31 +147,32 @@
       </div>
       <div class="tab-pane fade" id="transmission" role="tabpanel" aria-labelledby="transmission-tab">
         <h2>Transmission settings</h2>
-        {% include 'includes/dragons.html' %}
         <div class="mb-3">
           <label for="use_transmission" class="form-label">
             Use Transmission as backup client(if you want to download more
-            files then you have support in your TorBox plan, then you can use Transmission as a backup client):
+            files at the same time, than you have support in your TorBox plan, then you can use Transmission as a backup
+            client):
           </label>
           <input id="use_transmission" type="checkbox" x-model="configuration.USE_TRANSMISSION" />
         </div>
         <div class="mb-3">
-          <label for="transmission_host" class="form-label">
-            Transmission host (required if using Transmission):
+          <label for="skip_download_on_next_status_check_transmission" class="form-label">
+            Skip download for next status check in Transmission(useful if you already downloaded them):
           </label>
-          <input class="form-control" id="transmission_host" type="text" x-model="configuration.TRANSMISSION_HOST"
-            :class="{ 'is-invalid': transmission_host_valid === false, 'is-valid': transmission_host_valid === true }" />
+          <input id="skip_download_on_next_status_check_transmission" type="checkbox"
+            x-model="configuration.SKIP_DOWNLOAD_FOR_NEXT_STATUS_CHECK_IN_TRANSMISSION" />
         </div>
         <div class="mb-3">
-          <label for="transmission_dir" class="form-label">
-            Where does Transmission store downloaded files?:
+          <label for="transmission_host" class="form-label">
+            Transmission host (Start with https:// if using encrypted connection.):
           </label>
-          <input class="form-control" id="transmission_dir" type="text" x-model="configuration.TRANSMISSION_DIR"
-            :class="{ 'is-invalid': transmission_dir_valid === false, 'is-valid': transmission_dir_valid === true }" />
+          <input class="form-control" id="transmission_host" type="text" x-model="configuration.TRANSMISSION_HOST"
+            :class="{ 'is-invalid': transmission_host_valid === false, 'is-valid': transmission_host_valid === true }"
+            placeholder="Input transmission host. Start with https:// if using encrypted connection." />
         </div>
         <div class="mb-3">
           <label for="transmission_port" class="form-label">
-            Transmission port (required if using Transmission):
+            Transmission port:
           </label>
           <input class="form-control" id="transmission_port" type="text" x-model="configuration.TRANSMISSION_PORT"
             :class="{ 'is-invalid': transmission_port_valid === false, 'is-valid': transmission_port_valid === true }" />
@@ -195,6 +194,49 @@
             :class="{ 'is-invalid': transmission_password_valid === false, 'is-valid': transmission_password_valid === true }"
             :placeholder="configuration.TRANSMISSION_PASSWORD_SET ? 'Transmission password is set' : 'Please input Transmission password if required'" />
         </div>
+        <h3>Sftp access for Transmission files</h3>
+        <div class="mb-3">
+          <label for="transmission_dir" class="form-label">
+            Where does Transmission store downloaded files on remote host(requires absolute path, example
+            /home/user/downloads/transmission)?:
+          </label>
+          <input class="form-control" id="transmission_dir" type="text" x-model="configuration.TRANSMISSION_DIR"
+            :class="{ 'is-invalid': transmission_dir_valid === false, 'is-valid': transmission_dir_valid === true }" />
+        </div>
+        <div class="mb-3">
+          <label for="transmission_sftp_host" class="form-label">
+            Sftp host:
+          </label>
+          <input class="form-control" id="transmission_sftp_host" type="text"
+            x-model="configuration.TRANSMISSION_SFTP_HOST"
+            :class="{ 'is-invalid': transmission_sftp_host_valid === false, 'is-valid': transmission_sftp_host_valid === true }" />
+        </div>
+        <div class="mb-3">
+          <label for="transmission_port" class="form-label">
+            Sftp port:
+          </label>
+          <input class="form-control" id="transmission_sfpt_port" type="text"
+            x-model="configuration.TRANSMISSION_SFTP_PORT"
+            :class="{ 'is-invalid': transmission_sftp_port_valid === false, 'is-valid': transmission_sftp_port_valid === true }" />
+        </div>
+        <div class="mb-3">
+          <label for="transmission_sftp_user" class="form-label">
+            Sftp user:
+          </label>
+          <input class="form-control" id="transmission_sftp_user" type="text"
+            x-model="configuration.TRANSMISSION_SFTP_USER"
+            :class="{ 'is-invalid': transmission_sftp_user_valid === false, 'is-valid': transmission_sftp_user_valid === true }" />
+        </div>
+        <div class="mb-3">
+          <label for="transmission_sftp_password" class="form-label">
+            Sftp password:
+          </label>
+          <input class="form-control" id="transmission_sftp_password" type="password"
+            x-model="transmission_sftp_password_value"
+            :class="{ 'is-invalid': transmission_sftp_password_valid === false, 'is-valid': transmission_sftp_password_valid === true }"
+            :placeholder="configuration.TRANSMISSION_SFTP_PASSWORD_SET ? 'Sftp password is set' : 'Please input Sftp password if required'" />
+        </div>
+
         <div class="mb-3">
           <button class="btn btn-secondary ms-auto" @click="validateTransmission()">Validate Transmission</button>
         </div>
@@ -295,6 +337,78 @@
           <input class="form-check-input" type="radio" name="radio-clean" id="radio-clean-auto" value="1"
             x-model="configuration.CLEAN_ACTIVE_DOWNLOADS_POLICY" />
         </div>
+        <div class="card">
+          <div class="card-header">
+            Limit transmission usage settings(only used if Transmission is enabled as backup client)
+          </div>
+          <div class="card-body">
+            <div class="mb-3">
+              <label for="download_private_on_transmission_only" class="form-label">
+                In queue, download private torrents only on transmission.
+              </label>
+              <input id="download_private_on_transmission_only" type="checkbox"
+                x-model="configuration.DOWNLOAD_PRIVATE_ON_TRANSMISSION_ONLY" />
+            </div>
+            <div class="mb-3">
+              <label for="DOWNLOAD_HOME_VIDEOS_TYPE_ON_TRANSMISSION" class="form-label">
+                In queue, allow transmission to download home video type torrents.
+              </label>
+              <input id="DOWNLOAD_HOME_VIDEOS_TYPE_ON_TRANSMISSION" type="checkbox"
+                x-model="configuration.DOWNLOAD_HOME_VIDEOS_TYPE_ON_TRANSMISSION" />
+            </div>
+
+            <div class="mb-3">
+              <label for="DOWNLOAD_NO_TYPE_ON_TRANSMISSION" class="form-label">
+                In queue, allow transmission to download torrents with no type.
+              </label>
+              <input id="DOWNLOAD_NO_TYPE_ON_TRANSMISSION" type="checkbox"
+                x-model="configuration.DOWNLOAD_NO_TYPE_ON_TRANSMISSION" />
+            </div>
+
+            <div class="mb-3">
+              <label for="DOWNLOAD_MOVIE_TYPE_ON_TRANSMISSION" class="form-label">
+                In queue, allow transmission to download movie type torrents.
+              </label>
+              <input id="DOWNLOAD_MOVIE_TYPE_ON_TRANSMISSION" type="checkbox"
+                x-model="configuration.DOWNLOAD_MOVIE_TYPE_ON_TRANSMISSION" />
+            </div>
+
+            <div class="mb-3">
+              <label for="DOWNLOAD_MOVIE_SERIES_TYPE_ON_TRANSMISSION" class="form-label">
+                In queue, allow transmission to download movie series type torrents.
+              </label>
+              <input id="DOWNLOAD_MOVIE_SERIES_TYPE_ON_TRANSMISSION" type="checkbox"
+                x-model="configuration.DOWNLOAD_MOVIE_SERIES_TYPE_ON_TRANSMISSION" />
+            </div>
+
+            <div class="mb-3">
+              <label for="DOWNLOAD_AUDIOBOOKS_TYPE_ON_TRANSMISSION" class="form-label">
+                In queue, allow transmission to download audiobooks type torrents.
+              </label>
+              <input id="DOWNLOAD_AUDIOBOOKS_TYPE_ON_TRANSMISSION" type="checkbox"
+                x-model="configuration.DOWNLOAD_AUDIOBOOKS_TYPE_ON_TRANSMISSION" />
+            </div>
+
+            <div class="mb-3">
+              <label for="DOWNLOAD_EBOOKS_TYPE_ON_TRANSMISSION" class="form-label">
+                In queue, allow transmission to download e-books type torrents.
+              </label>
+              <input id="DOWNLOAD_EBOOKS_TYPE_ON_TRANSMISSION" type="checkbox"
+                x-model="configuration.DOWNLOAD_EBOOKS_TYPE_ON_TRANSMISSION" />
+            </div>
+
+            <div class="mb-3">
+              <label for="DOWNLOAD_OTHER_TYPE_ON_TRANSMISSION" class="form-label">
+                In queue, allow transmission to download other type torrents.
+              </label>
+              <input id="DOWNLOAD_OTHER_TYPE_ON_TRANSMISSION" type="checkbox"
+                x-model="configuration.DOWNLOAD_OTHER_TYPE_ON_TRANSMISSION" />
+            </div>
+          </div>
+        </div>
+
+
+
         <div class="mb-3">
           <button class="btn btn-secondary ms-auto" @click="validateQueueFolders()">Validate queue folders</button>
         </div>

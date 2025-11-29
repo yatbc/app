@@ -5,6 +5,7 @@ from .models import (
     TorrentHistory,
     Torrent,
     Level,
+    LogSource,
 )
 from constance import config
 from pathlib import Path
@@ -17,12 +18,46 @@ from .commondao import (
     torrent_to_log,
     get_active_torrents_with_current_history,
 )
+from .common import TORBOX_CLIENT, TRANSMISSION_CLIENT
 
 MANUAL_POLICY = 0
 
 
-def get_active_queue(limit=None):
-    queue = TorrentQueue.objects.all().order_by("-priority", "-added_at")
+def get_active_queue(limit=None, transmission=False, all=False):
+    query = TorrentQueue.objects.all()
+    if (
+        config.DOWNLOAD_PRIVATE_ON_TRANSMISSION_ONLY
+        and not transmission
+        and config.USE_TRANSMISSION
+        and not all
+    ):
+        query = query.exclude(torrent_private=True)
+    if transmission and config.USE_TRANSMISSION and not all:
+        if not config.DOWNLOAD_HOME_VIDEOS_TYPE_ON_TRANSMISSION:
+            no_type = TorrentType.objects.get_home_video()
+            query = query.exclude(torrent_type=no_type)
+        if not config.DOWNLOAD_NO_TYPE_ON_TRANSMISSION:
+            no_type = TorrentType.objects.get_no_type()
+            query = query.exclude(torrent_type=no_type)
+        if not config.DOWNLOAD_MOVIE_TYPE_ON_TRANSMISSION:
+            movie_type = TorrentType.objects.get_movies()
+            query = query.exclude(torrent_type=movie_type)
+        if not config.DOWNLOAD_MOVIE_SERIES_TYPE_ON_TRANSMISSION:
+            movie_series_type = TorrentType.objects.get_movie_series()
+            query = query.exclude(torrent_type=movie_series_type)
+        if not config.DOWNLOAD_AUDIOBOOKS_TYPE_ON_TRANSMISSION:
+            audiobook_type = TorrentType.objects.get_audiobooks()
+            query = query.exclude(torrent_type=audiobook_type)
+        if not config.DOWNLOAD_EBOOKS_TYPE_ON_TRANSMISSION:
+            ebook_type = TorrentType.objects.get_ebooks()
+            query = query.exclude(torrent_type=ebook_type)
+        if not config.DOWNLOAD_OTHER_TYPE_ON_TRANSMISSION:
+            other_type = TorrentType.objects.get_other()
+            query = query.exclude(torrent_type=other_type)
+
+    queue = query.order_by(
+        "-priority", "added_at"
+    )  # sort by priority desc, then by added_at asc so older entries are processed first
     if limit:
         return queue[:limit]
     return queue
@@ -30,17 +65,6 @@ def get_active_queue(limit=None):
 
 def get_queue_count():
     return TorrentQueue.objects.all().count()
-
-
-def add_to_queue_by_magnet(magnet, torrent_type):
-    logger = logging.getLogger("torbox")
-    entry = TorrentQueue.objects.create(magnet=magnet, torrent_type=torrent_type)
-    add_log(
-        message=f"Added torrent to queue with id: {format_log_value(entry.id)}",
-        level=Level.objects.get_info(),
-        source="queuemgr",
-    )
-    return entry
 
 
 def add_to_queue_by_torrent_file(path: Path, torrent_type: TorrentType, private):
@@ -59,7 +83,7 @@ def add_to_queue_by_torrent_file(path: Path, torrent_type: TorrentType, private)
         add_log(
             message=f"Added torrent to queue with id: {format_log_value(entry.id)}, from path: {format_log_value(path.as_posix())}, and marked as private: {format_log_value(private)}",
             level=Level.objects.get_info(),
-            source="queuemgr",
+            source=LogSource.objects.get_queue_mgr(),
         )
         return entry
     return None
@@ -78,7 +102,7 @@ def get_queue_folders():
                 add_log(
                     message=f"For type: {format_log_value(type.name)}, queue folder:<br/>{format_log_value(path.as_posix())}<br/> didn't exist. Created.",
                     level=Level.objects.get_info(),
-                    source="queuemgr",
+                    source=LogSource.objects.get_queue_mgr(),
                 )
             yield path, type
 
@@ -99,18 +123,21 @@ def import_from_queue_folders():
                 add_log(
                     message=f"Removed torrent file: {format_log_value(entry.as_posix())}, after it was added to queue",
                     level=Level.objects.get_info(),
-                    source="queuemgr",
+                    source=LogSource.objects.get_queue_mgr(),
                 )
 
 
 def delete_torrent_with_log(torrent: Torrent):
-    from .torboxapi import delete_torrent
+    if torrent.client == TORBOX_CLIENT:
+        from .torboxapi import delete_torrent
+    if torrent.client == TRANSMISSION_CLIENT:
+        from .transmissionapi import delete_torrent
 
     if delete_torrent(torrent_id=torrent.id):
         add_log(
             message=f"Active downloads cleaned torrent: {torrent_to_log(torrent)}",
             level=Level.objects.get_info(),
-            source="queuemgr",
+            source=LogSource.objects.get_queue_mgr(),
             torrent=torrent,
         )
 
@@ -150,26 +177,35 @@ def clean_active_downloads():
     add_log(
         message=f"Active Torrents Cleaning action removed: {cleaned} torrents from remote client",
         level=Level.objects.get_info(),
-        source="queuemgr",
+        source=LogSource.objects.get_queue_mgr(),
     )
     return cleaned
 
 
 def add_from_queue():
     from .torboxapi import add_torrent_from_queue
-    from .torboxapi import get_free_download_slots
+    from .torboxapi import get_free_torbox_download_slots
+    from .transmissionapi import (
+        get_free_transmission_download_slots,
+        add_torrent_from_queue as transmission_add_torrent_from_queue,
+    )
 
     logger = logging.getLogger("torbox")
     queue_count = get_queue_count()
     if queue_count < 1:
         logger.info("Empty queue, skipping")
         return
-    count = get_free_download_slots()
-    logger.info(f"Processing queue, available slots: {count}")
-    if count < 1:
-        logger.info("No free slots, trying to clean")
+    count_torbox = get_free_torbox_download_slots()
+    count_transmission = get_free_transmission_download_slots()
+    logger.info(
+        f"Processing queue, available torbox slots: {count_torbox}, transmission: {count_transmission}"
+    )
+    if count_torbox < 1 or (config.USE_TRANSMISSION and count_transmission < 1):
+        logger.info("No free torbox or transmission slots, trying to clean")
         clean_active_downloads()
-    count = get_free_download_slots()
+
+    count = count_torbox + count_transmission
+    added_torrents = 0
     logger.info(f"Available slots for queue: {count}")
     if count < 1:
         logger.debug(config.SUPPRESS_NO_FREE_SLOTS_IN_QUEUE_MSG)
@@ -180,26 +216,50 @@ def add_from_queue():
         ) or not config.SUPPRESS_NO_FREE_SLOTS_IN_QUEUE_MSG:
             add_log(
                 message=f"Queue is not empty({queue_count}), but there are no free download slots. Try removing them manually or enable auto-clean. This message will not be repeated today.",
-                source="queuemgr",
+                source=LogSource.objects.get_queue_mgr(),
                 level=Level.objects.get_warning(),
             )
             next_notification = datetime.now() + timedelta(days=1)
             config.SUPPRESS_NO_FREE_SLOTS_IN_QUEUE_MSG = next_notification.isoformat()
         return
-    for entry in get_active_queue(count):
+    for entry in get_active_queue(count_torbox, transmission=False):
         new_torrent = add_torrent_from_queue(entry)
         if not new_torrent:
             add_log(
                 message=f"While adding torrents from queue, {format_log_value(entry.id)} could not add torrent",
                 level=Level.objects.get_error(),
-                source="queuemgr",
+                source=LogSource.objects.get_queue_mgr(),
             )
             return
         entry.delete()
         add_log(
             message=f"Added torrent: {torrent_to_log(new_torrent)} from queue",
             level=Level.objects.get_info(),
-            source="queuemgr",
+            source=LogSource.objects.get_queue_mgr(),
             torrent=new_torrent,
         )
-    logger.info(f"Finished processing queue, added: {count} new torrents")
+        added_torrents += 1
+
+    if not config.USE_TRANSMISSION:
+        logger.info("Transmission disabled, not queuing for it")
+        return
+    # it is possible, that transmission queue is marked for private torrents for type that is disabled in config, and those files will never be added
+    for entry in get_active_queue(count_transmission, transmission=True):
+        new_torrent = transmission_add_torrent_from_queue(entry)
+        if not new_torrent:
+            add_log(
+                message=f"While adding torrents from queue, {format_log_value(entry.id)} could not add torrent",
+                level=Level.objects.get_error(),
+                source=LogSource.objects.get_queue_mgr(),
+            )
+            return
+        entry.delete()
+        add_log(
+            message=f"Added torrent: {torrent_to_log(new_torrent)} from queue",
+            level=Level.objects.get_info(),
+            source=LogSource.objects.get_queue_mgr(),
+            torrent=new_torrent,
+        )
+        added_torrents += 1
+
+    logger.info(f"Finished processing queue, added: {added_torrents} new torrents")

@@ -1,7 +1,8 @@
 from django.test import TestCase, override_settings
 from ..models import Torrent, TorrentQueue, TorrentType
+from ..commondao import add_to_queue_by_magnet
+from ..common import TRANSMISSION_CLIENT, TORBOX_CLIENT
 from ..queuemgr import (
-    add_to_queue_by_magnet,
     get_active_queue,
     add_to_queue_by_torrent_file,
     get_queue_folders,
@@ -106,3 +107,102 @@ class QueueMgrTests(TestCase):
         result = clean_active_downloads()
         self.assertEqual(expected, result)
         delete_log.assert_called_once_with(expected_delete)
+
+    def test_active_queue_private_on_transmission(self):
+        TorrentQueue.objects.all().delete()
+        config.DOWNLOAD_PRIVATE_ON_TRANSMISSION_ONLY = True
+        config.DOWNLOAD_NO_TYPE_ON_TRANSMISSION = True
+        config.DOWNLOAD_HOME_VIDEOS_TYPE_ON_TRANSMISSION = True
+        config.DOWNLOAD_MOVIE_TYPE_ON_TRANSMISSION = True
+        config.DOWNLOAD_MOVIE_SERIES_TYPE_ON_TRANSMISSION = True
+        config.DOWNLOAD_AUDIOBOOKS_TYPE_ON_TRANSMISSION = True
+        config.DOWNLOAD_EBOOKS_TYPE_ON_TRANSMISSION = True
+        config.DOWNLOAD_OTHER_TYPE_ON_TRANSMISSION = True
+        config.USE_TRANSMISSION = True
+
+        config.QUEUE_DIR = "./test/"
+        work_dir = create_work_dir(config.QUEUE_DIR)
+        files = []
+        public_count = 0
+        private_count = 0
+        for path, type in get_queue_folders():
+            file, _ = create_file(type.name.replace(" ", "_") + ".torrent", path)
+            private = file.parent.name == "private"
+            add_to_queue_by_torrent_file(file, private=private, torrent_type=type)
+            private_count += 1 if private else 0
+            public_count += 1 if not private else 0
+
+        shutil.rmtree(work_dir)
+
+        active = get_active_queue(transmission=False)
+        self.assertEqual(len(active), public_count)
+        active = get_active_queue(transmission=True)
+        self.assertEqual(len(active), private_count + public_count)
+
+    def test_active_queue_limit(self):
+        TorrentQueue.objects.all().delete()
+        config.USE_TRANSMISSION = True
+        config.DOWNLOAD_PRIVATE_ON_TRANSMISSION_ONLY = True
+
+        config.QUEUE_DIR = "./test/"
+        work_dir = create_work_dir(config.QUEUE_DIR)
+
+        private_count = 0
+        public_count = 0
+
+        for path, type in get_queue_folders():
+            file, _ = create_file(type.name.replace(" ", "_") + ".torrent", path)
+            private = file.parent.name == "private"
+            add_to_queue_by_torrent_file(file, private=private, torrent_type=type)
+            private_count += 1 if private else 0
+            public_count += 1 if not private else 0
+
+        shutil.rmtree(work_dir)
+
+        active = get_active_queue(transmission=False, limit=public_count - 2)
+        self.assertEqual(len(active), public_count - 2)
+
+        active = get_active_queue(
+            transmission=True, limit=private_count + public_count - 3
+        )
+        self.assertEqual(len(active), private_count + public_count - 3)
+
+    def test_active_queue_download_only_specific_types_on_transmission(self):
+        TorrentQueue.objects.all().delete()
+        config.DOWNLOAD_PRIVATE_ON_TRANSMISSION_ONLY = False
+        config.DOWNLOAD_NO_TYPE_ON_TRANSMISSION = False
+        config.DOWNLOAD_HOME_VIDEOS_TYPE_ON_TRANSMISSION = False
+        config.DOWNLOAD_MOVIE_TYPE_ON_TRANSMISSION = False
+        config.DOWNLOAD_MOVIE_SERIES_TYPE_ON_TRANSMISSION = False
+        config.DOWNLOAD_AUDIOBOOKS_TYPE_ON_TRANSMISSION = False
+        config.DOWNLOAD_EBOOKS_TYPE_ON_TRANSMISSION = False
+        config.DOWNLOAD_OTHER_TYPE_ON_TRANSMISSION = False
+        config.USE_TRANSMISSION = True
+
+        config.QUEUE_DIR = "./test/"
+        work_dir = create_work_dir(config.QUEUE_DIR)
+        count = 0
+        for path, type in get_queue_folders():
+            file, _ = create_file(type.name.replace(" ", "_") + ".torrent", path)
+            private = file.parent.name == "private"
+            add_to_queue_by_torrent_file(file, private=private, torrent_type=type)
+            count += 1
+
+        shutil.rmtree(work_dir)
+
+        active = get_active_queue(transmission=False)
+        self.assertEqual(len(active), count)
+        active = get_active_queue(transmission=True)
+
+        self.assertEqual(len(active), 0)
+
+        config.DOWNLOAD_NO_TYPE_ON_TRANSMISSION = True
+        config.DOWNLOAD_HOME_VIDEOS_TYPE_ON_TRANSMISSION = True
+        config.DOWNLOAD_MOVIE_TYPE_ON_TRANSMISSION = True
+        config.DOWNLOAD_MOVIE_SERIES_TYPE_ON_TRANSMISSION = True
+        config.DOWNLOAD_AUDIOBOOKS_TYPE_ON_TRANSMISSION = True
+        config.DOWNLOAD_EBOOKS_TYPE_ON_TRANSMISSION = True
+        config.DOWNLOAD_OTHER_TYPE_ON_TRANSMISSION = True
+
+        active = get_active_queue(transmission=True)
+        self.assertEqual(len(active), count)

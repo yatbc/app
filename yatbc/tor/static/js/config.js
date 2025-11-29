@@ -4,6 +4,7 @@ function get_config() {
     configuration: {},
     aria_password_value: "",
     transmission_password_value: "",
+    transmission_sftp_password_value: "",
     torbox_api_key_value: "",
     torrent_types: {},
     torbox_api_valid: null,
@@ -18,6 +19,10 @@ function get_config() {
     transmission_port_valid: null,
     transmission_user_valid: null,
     transmission_password_valid: null,
+    transmission_sftp_host_valid: null,
+    transmission_sftp_port_valid: null,
+    transmission_sftp_user_valid: null,
+    transmission_sftp_password_valid: null,
     queue_root_folder_valid: null,
     folders_valid: {},
     test_ip: "",
@@ -70,6 +75,9 @@ function get_config() {
       }
       if (this.transmission_password_value) {
         value.TRANSMISSION_PASSWORD = this.transmission_password_value;
+      }
+      if (this.transmission_sftp_password_value) {
+        value.TRANSMISSION_SFTP_PASSWORD = this.transmission_sftp_password_value;
       }
       return value;
     },
@@ -248,24 +256,45 @@ function get_config() {
           this.transmission_port_valid = true;
           this.transmission_user_valid = true;
           this.transmission_password_valid = true;
+          this.transmission_password_valid = true;
+          this.transmission_sftp_host_valid = true;
+          this.transmission_sftp_port_valid = true;
+          this.transmission_sftp_user_valid = true;
+          this.transmission_sftp_password_valid = true;
         }),
         (onError = (json) => {
           this.isLoading = false;
           this.showAlert(json.error, false);
           WRONG_TRANSMISSION_DIR = 1;
+          WRONG_SFTP_HOST = 3
+          WRONG_TRANSMISSION_HOST = 2
           console.log("Transmission validation failed:", json);
           if (json["reason"] == WRONG_TRANSMISSION_DIR) {
             this.transmission_dir_valid = false;
-            this.transmission_host_valid = null;
-            this.transmission_port_valid = null;
-            this.transmission_user_valid = null;
-            this.transmission_password_valid = null;
-          } else {
-            this.transmission_dir_valid = true;
+            this.transmission_host_valid = true;
+            this.transmission_port_valid = true;
+            this.transmission_user_valid = true;
+            this.transmission_password_valid = true;
+            this.transmission_sftp_host_valid = true;
+            this.transmission_sftp_port_valid = true;
+            this.transmission_sftp_user_valid = true;
+            this.transmission_sftp_password_valid = true;
+          } else if (json["reason"] == WRONG_TRANSMISSION_HOST) {
+            this.transmission_dir_valid = null;
             this.transmission_host_valid = false;
             this.transmission_port_valid = false;
             this.transmission_user_valid = false;
             this.transmission_password_valid = false;
+          } else {
+            this.transmission_dir_valid = null;
+            this.transmission_sftp_host_valid = false;
+            this.transmission_sftp_port_valid = false;
+            this.transmission_sftp_user_valid = false;
+            this.transmission_sftp_password_valid = false;
+            this.transmission_host_valid = true;
+            this.transmission_port_valid = true;
+            this.transmission_user_valid = true;
+            this.transmission_password_valid = true;
           }
         })
       );

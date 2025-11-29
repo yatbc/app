@@ -8,3 +8,4 @@ asttokens
 django-constance
 bleach
 dotenv
+paramiko

@@ -215,27 +215,34 @@ class ActionMgrTests(TestCase):
         self.assertIsNone(episode)
 
     def test_get_metadata_by_search(self):
-        title, season, episode, imdbid = get_metadata_by_search(None)
+        title, season, episode, imdbid, resolution = get_metadata_by_search(None)
         self.assertIsNone(title)
         self.assertIsNone(season)
         self.assertIsNone(episode)
         self.assertIsNone(imdbid)
+        self.assertIsNone(resolution)
 
         search = create_search(
-            query="tt0000/s1/E2", title="Magic test", season=None, episode=None
+            query="tt0000/s1/E2",
+            title="Magic test",
+            season=None,
+            episode=None,
+            resolution="720p",
         )
-        title, season, episode, imdbid = get_metadata_by_search(search)
+        title, season, episode, imdbid, resolution = get_metadata_by_search(search)
         self.assertEqual(title, "Magic test")
         self.assertEqual(season, 1)
         self.assertEqual(episode, 2)
         self.assertEqual(imdbid, "tt0000")
+        self.assertEqual(resolution, "720p")
 
         search = create_search(query="tt1", title="Magic test", season=2, episode="3")
-        title, season, episode, imdbid = get_metadata_by_search(search)
+        title, season, episode, imdbid, resolution = get_metadata_by_search(search)
         self.assertEqual(title, "Magic test")
         self.assertEqual(season, 2)
         self.assertEqual(episode, 3)
         self.assertEqual(imdbid, "tt1")
+        self.assertIsNone(resolution)
 
     def test_action_factory_nothing(self):
         file, temp_file, work_dir = self._prepare_test(self.no_type)
@@ -303,7 +310,9 @@ class ActionMgrTests(TestCase):
             work_dir=work_dir,
         )
 
-        search = create_search("tt001", "Test Movie Series", None, None, file.torrent)
+        search = create_search(
+            "tt001", "Test Movie Series", None, None, file.torrent, resolution="1080p"
+        )
         mgr = ActionMgr()
         target = create_work_dir(self.movie_series.target_dir)
         self.assertTrue(temp_file.exists())
@@ -315,13 +324,13 @@ class ActionMgrTests(TestCase):
             target
             / "Test Movie Series [imdbid-tt001]"
             / "season 01"
-            / "Test Movie Series S01E01.mp4"
+            / "Test Movie Series S01E01 1080p.mp4"
         )
         expected_file2 = Path(
             target
             / "Test Movie Series [imdbid-tt001]"
             / "season 01"
-            / "Test Movie Series S01E02.mp4"
+            / "Test Movie Series S01E02 1080p.mp4"
         )
         expected_file3 = Path(
             target / "Test Movie Series [imdbid-tt001]" / "season 01" / "Extra.txt"
@@ -338,7 +347,9 @@ class ActionMgrTests(TestCase):
         file, temp_file, work_dir = self._prepare_test(
             self.movie_series, file_name="test.mp4"
         )
-        search = create_search("tt001", "Test Movie Series", 2, 1, file.torrent)
+        search = create_search(
+            "tt001", "Test Movie Series", 2, 1, file.torrent, resolution="2160p"
+        )
         mgr = ActionMgr()
         target = create_work_dir(self.movie_series.target_dir)
         movie_series_dir = create_work_dir(target / "Test Movie Series [imdbid-tt001]")
@@ -348,7 +359,7 @@ class ActionMgrTests(TestCase):
 
         mgr.run(file.torrent)
 
-        expected_file = Path(season / "Test Movie Series S02E01.mp4")
+        expected_file = Path(season / "Test Movie Series S02E01 2160p.mp4")
         self.assertFalse(temp_file.exists())
         self.assertTrue(expected_file.exists())
         shutil.rmtree(target)
@@ -394,7 +405,9 @@ class ActionMgrTests(TestCase):
         file, temp_file, work_dir = self._prepare_test(
             self.movies, file_name="test.mp4"
         )
-        search = create_search("tt001", "Test Movie", None, None, file.torrent)
+        search = create_search(
+            "tt001", "Test Movie", None, None, file.torrent, resolution="1080p"
+        )
         mgr = ActionMgr()
         target = create_work_dir(self.movies.target_dir)
         self.assertTrue(temp_file.exists())
@@ -402,7 +415,9 @@ class ActionMgrTests(TestCase):
 
         mgr.run(file.torrent)
 
-        expected_file = Path(target / "Test Movie [imdbid-tt001]" / "Test Movie.mp4")
+        expected_file = Path(
+            target / "Test Movie [imdbid-tt001]" / "Test Movie 1080p.mp4"
+        )
         self.assertTrue(expected_file.exists())
         self.assertFalse(temp_file.exists())
         shutil.rmtree(target)
