@@ -32,6 +32,14 @@ if DEBUG:
 else:
     PERSISTENT_DIR = Path("/data") / "persistent"
 
+if DEBUG:
+    DISABLE_CLIENT_STATUS_UPDATES = False
+    # DISABLE_CLIENT_STATUS_UPDATES = (
+    #     True  # if you want to just test without torbox or other seedboxes statuses
+    # )
+else:
+    DISABLE_CLIENT_STATUS_UPDATES = False
+
 if os.environ.get("DOCKER_DEBUG") == "true":
     PERSISTENT_DIR = Path("/data") / "persistent"
     DEBUG = True
@@ -122,6 +130,7 @@ CONSTANCE_CONFIG = {
         "api",
         'Api part of Torbox host, e.g. if full host for api is https://api.torbox.app, then this should be "api"',
     ),
+    "COLLECT_PEER_INFO": (False, "Collect peer info for torrents"),
     "TORBOX_SEARCH_API": (
         "search-api",
         'Search Api part of Torbox host, e.g. if full host for search api is https://search-api.torbox.app, then this should be "search-api"',
@@ -134,9 +143,12 @@ CONSTANCE_CONFIG = {
         "/home/user/downloads/transmission",
         "Where does Transmission store downloaded files?",
     ),
-    "ARIA2_DIR": ("/data/aria2", "Where Aria2 should store downloaded files"),
+    "ARIA2_DIR": (
+        "/data/aria2",
+        "Where Aria2 should store downloaded files",
+    ),
     "QUEUE_DIR": (
-        "/data/persistent/queue",
+        str(PERSISTENT_DIR) + "/queue",
         "Where is root folder for queue monitoring?",
     ),
     "MAX_DOWNLOAD_TORBOX_SLOTS": (0, "Max download torbox slots"),
@@ -159,6 +171,14 @@ CONSTANCE_CONFIG = {
     "ORGANIZE_MOVIES": (
         True,
         "Should the app organize newly downloaded movies?",
+    ),
+    "ORGANIZE_AUDIOBOOKS": (
+        True,
+        "Should the app organize newly downloaded audiobooks?",
+    ),
+    "ORGANIZE_AUDIOBOOKS_ONLY_CONNECTED_TO_SEARCH": (
+        True,
+        "Should the app organize newly downloaded audiobooks, but only connected to search result?",
     ),
     "STASH_HOST": ("", "Stash host"),
     "STASH_PORT": ("9999", "Stash port"),
@@ -237,7 +257,7 @@ DATABASES = {
         "ENGINE": "django.db.backends.sqlite3",
         "NAME": PERSISTENT_DIR / "db.sqlite3",
         "OPTIONS": {
-            "timeout": 20,
+            "timeout": 30,
         },
     }
 }

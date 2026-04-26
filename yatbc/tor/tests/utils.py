@@ -6,11 +6,42 @@ from ..models import (
     TorrentStatus,
     TorrentTorBoxSearch,
     TorrentTorBoxSearchResult,
+    JackettSearchResultAudiobook,
+    Person,
 )
 import shutil
 from pathlib import Path
 from ..torboxapi import TORBOX_CLIENT
 from django.utils import timezone
+
+
+def get_person(name="Test Person"):
+    person, _ = Person.objects.get_or_create(name=name)
+    return person
+
+
+def create_audiobook_search_result(
+    query,
+    title,
+    author,
+    narrator=None,
+    description=None,
+    torrent=None,
+) -> JackettSearchResultAudiobook:
+
+    return JackettSearchResultAudiobook.objects.create(
+        hash=torrent.hash if torrent else "fake",
+        title=title,
+        torrent=torrent,
+        author=get_person(author),
+        description=description,
+        narrator=get_person(narrator) if narrator else None,
+        size=123,
+        grabs=1,
+        seeders=1,
+        peers=1,
+        query=query,
+    )
 
 
 def create_search(
@@ -92,10 +123,11 @@ def create_torrent(
     local_download=True,
     created_at="2000-01-01 00:11",
     download_finished=True,
+    hash="HASH123",
 ):
     return Torrent.objects.create(
         active=True,
-        hash="HASH",
+        hash=hash,
         name="FakeName",
         size=123,
         created_at=created_at,

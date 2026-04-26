@@ -1,0 +1,1155 @@
+import logging
+import time
+from datetime import date, timedelta
+from urllib.parse import urlparse
+from django.forms.models import model_to_dict
+
+from django.http import JsonResponse
+
+from django.http import StreamingHttpResponse
+from constance import config
+
+from django_tasks import default_task_backend
+from pathlib import Path
+from django.utils import timezone
+import json
+import requests
+import base64
+from django.db.models import Q
+from django.db import IntegrityError
+from tor.statusmgr import StatusMgr
+from tor.queuemgr import get_queue_folders, get_active_queue, get_queue_count
+from tor.common import (
+    get_name_from_magnet,
+    TORBOX_CLIENT,
+    TRANSMISSION_CLIENT,
+    shorten_torrent_name,
+)
+from tor.commondao import (
+    get_active_torrents_with_formatted_age,
+    format_age,
+    get_history_with_age,
+    get_active_torrents_with_current_history,
+    get_ratio_stats,
+)
+from tor.arrmanager import get_all_arrs
+from tor.models import (
+    Torrent,
+    TorrentHistory,
+    TorrentTorBoxSearchResult,
+    TorrentTorBoxSearch,
+    TorrentType,
+    ErrorLog,
+    TorrentFile,
+    TorrentQueue,
+    LogSource,
+    ArrMovieSeries,
+    TorrentStatus,
+    JackettQueryUrl,
+)
+from tor.tasks import (
+    queue_torbox_status,
+    torbox_request_torrent_files,
+    queue_scheduler,
+    torbox_search,
+    add_torbox_torrent,
+    change_torrent_task,
+    double_torrent_task,
+    add_magnet,
+    check_status,
+    get_task,
+    get_tasks,
+    not_status_checking,
+    TaskResultStatus,
+    queue_import_from_queue_folders,
+    process_arr_task,
+)
+
+from tor.torboxapi import validate_api, add_referral_api
+from tor.ariaapi import validate_aria_api
+from tor.stashapi import validate_stash_api
+
+
+def data_updates(request):
+    def wait_for_done(previous_path, timeout=10):
+        logger = logging.getLogger("torbox")
+        active_tasks = [
+            item
+            for item in get_tasks(
+                exclude_tasks_type=not_status_checking,
+                status=[TaskResultStatus.RUNNING],
+            )
+        ]
+        if not active_tasks:
+            return None, ""
+        path = active_tasks[0].task_path
+        for i in range(0, timeout):
+            task = get_task(path, [TaskResultStatus.RUNNING])
+            if not task:
+                logger.debug(f"Task {path} is done")
+                return True, ""
+            time.sleep(1)
+            if previous_path == path:
+                logger.debug(f"Long running task: {path}")
+                yield f"data: {json.dumps({'status': 'LongRunning', 'task': path})}\n\n"
+                continue
+            yield f"data: {json.dumps({'status': 'TaskStillWorking', 'task': path})}\n\n"
+        return False, path
+
+    def event_stream():
+        logger = logging.getLogger("torbox")
+        # fixme: if tasks in queue are quick to finish, there will be no notification about finished task
+        try:
+            path = ""
+            no_active_tasks_count = 0
+            worker_not_responding_threshold = 10
+            previous_done_tasks_count = 0
+            current_done_tasks_count = 0
+            while True:
+                task_done, path = yield from wait_for_done(previous_path=path)
+                if task_done is None:
+                    no_active_tasks_count += 1
+                else:
+                    no_active_tasks_count = 0
+                previous_done_tasks_count = current_done_tasks_count
+                current_done_tasks_count = get_tasks(
+                    exclude_tasks_type=not_status_checking,
+                    status=[TaskResultStatus.SUCCEEDED, TaskResultStatus.FAILED],
+                ).count()
+
+                queued_tasks = [
+                    item
+                    for item in get_tasks(
+                        exclude_tasks_type=not_status_checking,
+                        status=[TaskResultStatus.READY],
+                    )
+                ]
+
+                if (
+                    queued_tasks
+                    and no_active_tasks_count > worker_not_responding_threshold
+                ):
+                    yield f"data: {json.dumps({'status': 'NoWorker', 'task': queued_tasks[0].task_path})}\n\n"
+                    time.sleep(2)
+                    continue
+
+                if not queued_tasks and (
+                    task_done or current_done_tasks_count > previous_done_tasks_count
+                ):
+                    if (
+                        current_done_tasks_count > previous_done_tasks_count
+                        and not task_done
+                    ):
+                        logger.debug(
+                            f"Current done tasks count: {current_done_tasks_count}, previous done tasks count: {previous_done_tasks_count}"
+                        )
+                    yield f"data: {json.dumps({'status': 'Update'})}\n\n"
+                    time.sleep(2)
+                    continue
+
+                if queued_tasks:
+                    time.sleep(2)
+                    continue
+
+                yield f"data: {json.dumps({'status': 'NoTasks'})}\n\n"
+                time.sleep(2)
+        except GeneratorExit:
+            logger.info("Event stream closed")
+        except Exception as e:
+            logger.error(f"Error in event stream: {e}")
+
+    return StreamingHttpResponse(event_stream(), content_type="text/event-stream")
+
+
+# API Endpoints
+
+
+def search_torrent_api(request, query, season=0, episode=0):
+    logger = logging.getLogger("torbox")
+    logger.info(f"Search torrent: {query} {season} {episode}")
+    result = torbox_search.enqueue(query)
+    logger.info("Task enqueued")
+    return JsonResponse({"request_id": result.id}, safe=False)
+
+
+def get_torrent_speed_history(request, id):
+    logger = logging.getLogger("torbox")
+    logger.info(f"Loading torrent speed history for id: {id}")
+    try:
+        torrent = Torrent.objects.get(id=id)
+        history = TorrentHistory.objects.filter(
+            torrent=torrent, updated_at__gte=date(2000, 1, 1)
+        ).order_by("-updated_at")
+        if not history:
+            logger.warning(f"No history found for torrent id: {id}")
+            return JsonResponse({"error": "No history found"}, safe=False)
+
+        data = [
+            {"x": entry.updated_at.isoformat(), "y": entry.download_speed}
+            for entry in history
+        ]
+        return JsonResponse(data, safe=False)
+    except Torrent.DoesNotExist:
+        logger.error(f"Torrent with id {id} does not exist")
+        return JsonResponse({"error": "Torrent not found"}, safe=False)
+
+
+def get_torrent_log(request, id):
+    logger = logging.getLogger("torbox")
+    logger.info(f"Loading torrent logs for id: {id}")
+    try:
+        torrent = Torrent.objects.get(id=id)
+        error_logs = (
+            ErrorLog.objects.filter(torrenterrorlog__torrent=torrent)
+            .prefetch_related("level")
+            .order_by("-created_at")
+        )
+
+        logs = [
+            {
+                "id": entry.id,
+                "message": entry.message,
+                "source": model_to_dict(entry.source),
+                "level": entry.level.name,
+                "created_at": entry.created_at.isoformat(),
+                "torrent_id": id,
+            }
+            for entry in error_logs
+        ]
+        return JsonResponse(logs, safe=False)
+    except Torrent.DoesNotExist:
+        logger.error(f"Torrent with id {id} does not exist")
+        return JsonResponse({"error": "Torrent not found"}, safe=False)
+
+
+def get_torrent_ratio_history(request, id):
+    logger = logging.getLogger("torbox")
+    logger.info(f"Loading torrent ratio history for id: {id}")
+    try:
+        torrent = Torrent.objects.get(id=id)
+        history = get_ratio_stats(torrent)
+        ratio = [
+            {"x": entry.updated_at.date().isoformat(), "y": entry.ratio}
+            for entry in history
+        ]
+
+        return JsonResponse({"ratio": ratio}, safe=False)
+    except Torrent.DoesNotExist:
+        logger.error(f"Torrent with id {id} does not exist")
+        return JsonResponse({"error": "Torrent not found"}, safe=False)
+
+
+def get_torrent_seeders_history(request, id):
+    logger = logging.getLogger("torbox")
+    logger.info(f"Loading torrent seed history for id: {id}")
+    try:
+        torrent = Torrent.objects.get(id=id)
+        history = TorrentHistory.objects.filter(
+            torrent=torrent, updated_at__gte=date(2000, 1, 1)
+        ).order_by("-updated_at")
+        if not history:
+            logger.warning(f"No history found for torrent id: {id}")
+            return JsonResponse({"error": "No history found"}, safe=False)
+
+        seeds = [
+            {"x": entry.updated_at.isoformat(), "y": entry.seeds} for entry in history
+        ]
+        peers = [
+            {"x": entry.updated_at.isoformat(), "y": entry.peers} for entry in history
+        ]
+        return JsonResponse({"seeds": seeds, "peers": peers}, safe=False)
+    except Torrent.DoesNotExist:
+        logger.error(f"Torrent with id {id} does not exist")
+        return JsonResponse({"error": "Torrent not found"}, safe=False)
+
+
+def get_torrent_details(request, id):
+    logger = logging.getLogger("torbox")
+    logger.info(f"Loading torrent details for id: {id}")
+    try:
+        torrent = Torrent.objects.get(id=id)
+        torrent_history = (
+            TorrentHistory.objects.filter(
+                torrent=torrent, updated_at__gte=date(2000, 1, 1)
+            )
+            .order_by("-updated_at")
+            .first()
+        )
+        if not torrent_history:
+            logger.error(f"Torrent: {torrent.id} has no history!")
+            return JsonResponse({"error": "Torrent has no history"}, safe=False)
+        files = TorrentFile.objects.filter(torrent=torrent).prefetch_related("aria")
+        files_with_aria = []
+        for file in files:
+            entry = model_to_dict(file)
+            if file.aria:
+                entry["aria"] = model_to_dict(file.aria)
+            else:
+                entry["aria"] = {"status": "Waiting", "error": ""}
+            files_with_aria.append(entry)
+        result = {
+            "torrent": model_to_dict(torrent),
+            "history": model_to_dict(torrent_history),
+            "files": files_with_aria,
+        }
+        return JsonResponse(result, safe=False)
+    except Torrent.DoesNotExist:
+        logger.error(f"Torrent with id {id} does not exist")
+        return JsonResponse({"error": "Torrent not found"}, safe=False)
+
+
+def add_referral(request):
+    logger = logging.getLogger("torbox")
+    result, status = add_referral_api()
+    if result:
+        logger.info(f"Referral added: {status}")
+        return JsonResponse({"status": "Referral added successfully"}, safe=False)
+    else:
+        logger.error(f"Failed to add referral: {status}")
+        return JsonResponse({"error": status}, safe=False)
+
+
+def get_history(request, current=0, limit=20):
+    if current < 0:
+        current = 0
+    if limit < 0:
+        limit = 1
+    logger = logging.getLogger("torbox")
+    logger.info("Loading history")
+    history = Torrent.objects.filter(deleted=True).order_by("-created_at", "-name")[
+        current : current + limit
+    ]
+    result = []
+    for entry in history:
+        entry = shorten_torrent_name(entry)
+        entry = model_to_dict(entry)
+        result.append(entry)
+
+    return JsonResponse({"history": result}, safe=False)
+
+
+def remove_arr(request, arr_id: int):
+    arr = ArrMovieSeries.objects.filter(id=arr_id)
+    if arr:
+        arr.delete()
+        return JsonResponse({"status": "Ok"}, safe=False)
+    return JsonResponse({"error": f"Arr: {arr_id} didn't exist"}, safe=False)
+
+
+def change_arr_activity(request, arr_id: int):
+    arr = ArrMovieSeries.objects.filter(id=arr_id).first()
+    if arr:
+        arr.active = not arr.active
+        arr.save()
+        return JsonResponse({"status": "Ok"}, safe=False)
+    return JsonResponse({"error": f"Arr: {arr_id} doesn't exist"}, safe=False)
+
+
+def save_arr(request):
+    logger = logging.getLogger("torbox")
+    if request.method == "POST":
+        body = json.loads(request.body)
+        logger.debug(f"Save arr request body: {body}, type: {type(body)}")
+        if "imdbid" in body:
+            imdbid = body["imdbid"]
+            quality = body.get("quality", "")
+            include_words = body.get("include_words", "")
+            exclude_words = body.get("exclude_words", "")
+            season = body.get("requested_season", 1)
+            episode = body.get("requested_episode", 1)
+            encoder = body.get("encoder", "")
+            skip_full_season = body.get("skip_full_season", False)
+            id = body.get("id", None)
+            torrent_type = TorrentType.objects.get_movie_series()
+            if id:
+                arr = ArrMovieSeries.objects.get(pk=id)
+                arr.imdbid = imdbid
+                arr.quality = quality
+                arr.include_words = include_words
+                arr.exclude_words = exclude_words
+                arr.requested_season = season
+                arr.requested_episode = episode
+                arr.encoder = encoder
+                arr.skip_full_season = skip_full_season
+                arr.save()
+            else:
+                try:
+                    arr = ArrMovieSeries.objects.create(
+                        imdbid=imdbid,
+                        quality=quality,
+                        encoder=encoder,
+                        include_words=include_words,
+                        exclude_words=exclude_words,
+                        requested_season=season,
+                        requested_episode=episode,
+                        torrent_type=torrent_type,
+                        skip_full_season=skip_full_season,
+                    )
+                except IntegrityError as e:
+                    return JsonResponse({"error": "Imdbid already existed"}, safe=False)
+            return JsonResponse(model_to_dict(arr), safe=False)
+
+        else:
+            logger.warning(f"Wrong body in save_arr: {body}")
+    return JsonResponse({"error": "Invalid request"}, safe=False)
+
+
+def retry_arr(request, arr_id: int):
+    process_arr_task.enqueue(arr_id)
+    return JsonResponse(
+        {"status": "Ok"}, safe=False
+    )  # don't return task id, arr, doesn't monitor task statuses
+
+
+def get_arr(request, current=0, limit=20):
+    if current < 0:
+        current = 0
+    if limit < 0:
+        limit = 1
+    logger = logging.getLogger("torbox")
+    logger.info("Loading arr")
+    arr = get_all_arrs()
+    arr = arr[current : current + limit]
+    result = []
+    for entry in arr:
+        dict_entry = model_to_dict(entry)
+        dict_entry["last_found_ago"] = (
+            format_age(entry.last_found_ago.total_seconds())
+            if entry.last_found_ago
+            else ""
+        )
+        dict_entry["last_checked_ago"] = (
+            format_age(entry.last_checked_ago.total_seconds())
+            if entry.last_checked_ago
+            else ""
+        )
+        result.append(dict_entry)
+
+    return JsonResponse(
+        {
+            "arr": result,
+            "defaultArr": model_to_dict(ArrMovieSeries.objects.get(imdbid="DEFAULT")),
+        },
+        safe=False,
+    )
+
+
+def get_logs(request, current=0, limit=20, log_source_id=0):
+    logger = logging.getLogger("torbox")
+    if current < 0:
+        current = 0
+    if limit < 0:
+        limit = 1
+    logger.info("Loading logs")
+    query = ErrorLog.objects.all()
+    if log_source_id:
+        query = ErrorLog.objects.filter(source__id=log_source_id)
+    logs = (
+        query.prefetch_related("torrenterrorlog_set")
+        .prefetch_related("level")
+        .prefetch_related("source")
+        .order_by("-created_at")[current : current + limit]
+    )
+    logs = [
+        {
+            "id": entry.id,
+            "message": entry.message,
+            "source": model_to_dict(entry.source),
+            "level": entry.level.name,
+            "created_at": entry.created_at.isoformat(),
+            "torrent_id": (
+                entry.torrenterrorlog_set.first().torrent.id
+                if entry.torrenterrorlog_set.first()
+                else None
+            ),
+        }
+        for entry in logs
+    ]
+    result = {"log": logs}
+    return JsonResponse(result, safe=False)
+
+
+def delete_queue(request):
+    logger = logging.getLogger("torbox")
+    if request.method == "POST":
+        body = json.loads(request.body)
+        logger.debug(f"Delete queue request body: {body}, type: {type(body)}")
+        if "command" in body:
+            if body["command"] == "single" and "queue_id" in body:
+                id = body["queue_id"]
+                TorrentQueue.objects.filter(id=id).delete()
+                logger.info(f"Queue entry for: {id} removed")
+                return JsonResponse(
+                    {"status": f"Queue for id: {id} deleted"}, safe=False
+                )
+        else:
+            return JsonResponse({"error": "Wrong request"}, status=400)
+    return JsonResponse({"error": "Invalid request"}, status=400)
+
+
+def delete_history(request):
+    logger = logging.getLogger("torbox")
+    if request.method == "POST":
+        body = json.loads(request.body)
+        logger.debug(f"Delete history request body: {body}, type: {type(body)}")
+        if "command" in body:
+            if body["command"] == "single" and "torrent_id" in body:
+                id = body["torrent_id"]
+                Torrent.objects.filter(id=id).delete()
+                logger.info(f"History for: {id} removed")
+                return JsonResponse({"status": f"History for id deleted"}, safe=False)
+            if body["command"] == "older":
+                Torrent.objects.filter(
+                    deleted=True, created_at__lte=timezone.now() - timedelta(days=30)
+                ).delete()
+                logger.info("History older than 14 days deleted")
+                return JsonResponse(
+                    {"status": "History created older than 30 days deleted"}, safe=False
+                )
+            elif body["command"] == "all":
+                Torrent.objects.filter(deleted=True).delete()
+                logger.info("All history deleted")
+                return JsonResponse({"status": "All history deleted"}, safe=False)
+        else:
+            return JsonResponse({"error": "Wrong request"}, status=400)
+    return JsonResponse({"error": "Invalid request"}, status=400)
+
+
+def delete_logs(request):
+    logger = logging.getLogger("torbox")
+    if request.method == "POST":
+        body = json.loads(request.body)
+        logger.debug(f"Delete logs request body: {body}, type: {type(body)}")
+        if "command" in body:
+            if body["command"] == "single" and "torrent_id" in body:
+                id = body["torrent_id"]
+                ErrorLog.objects.filter(torrenterrorlog__torrent_id=id).delete()
+                logger.info(f"Logs related to torrent: {id} deleted")
+                return JsonResponse(
+                    {"status": "Logs related to selected torrent deleted"}, safe=False
+                )
+            if body["command"] == "older":
+                ErrorLog.objects.filter(
+                    created_at__lte=timezone.now() - timedelta(days=14)
+                ).delete()
+                logger.info("Logs older than 14 days deleted")
+                return JsonResponse(
+                    {"status": "Logs older than 14 days deleted"}, safe=False
+                )
+            elif body["command"] == "all":
+                ErrorLog.objects.all().delete()
+                logger.info("All logs deleted")
+                return JsonResponse({"status": "All logs deleted"}, safe=False)
+        else:
+            return JsonResponse({"error": "Wrong request"}, status=400)
+    return JsonResponse({"error": "Invalid request"}, status=400)
+
+
+def force_finish_torrent(request, id):
+    logger = logging.getLogger("torbox")
+    try:
+        torrent = Torrent.objects.get(id=id)
+        status_mgr = StatusMgr.get_instance()
+        status_mgr.force_transition_in_done(torrent)
+        return JsonResponse({"status": "Ok"}, safe=False)
+    except Exception as e:
+        logger.error(f"Failed to finish torrent {id}: {e}")
+        return JsonResponse({"error": f"Failed to finish torrent: {id}"}, safe=False)
+
+
+def redownload_torrent_files(request, id):
+    logger = logging.getLogger("torbox")
+    try:
+        torrent = Torrent.objects.get(id=id)
+        status_mgr = StatusMgr.get_instance()
+
+        if status_mgr.force_transition_in_client_progress(torrent):
+            return JsonResponse({"status": "Ok"}, safe=False)
+        return JsonResponse(
+            {
+                "error": f"Could not transition into client progress status: {torrent.name}"
+            },
+            safe=False,
+        )
+    except Exception as e:
+        logger.error(f"Failed to redownload torrent files for {id}: {e}")
+        return JsonResponse(
+            {"error": f"Failed to redownload torrent files for torrent id: {id}"},
+            safe=False,
+        )
+
+
+def validate_stash(request):
+    logger = logging.getLogger("torbox")
+    if request.method == "POST":
+        body = json.loads(request.body)
+        if "STASH_HOST" in body:
+            result = body
+            STASH_HOST = result.get("STASH_HOST", config.STASH_HOST)
+            STASH_PORT = result.get("STASH_PORT", config.STASH_PORT)
+            STASH_ROOT_DIR = result.get("STASH_ROOT_DIR", config.STASH_ROOT_DIR)
+            ok, response = validate_stash_api(
+                STASH_HOST, STASH_PORT, "", STASH_ROOT_DIR
+            )
+
+            logger.info(f"Stash validation: {ok}, {response}")
+            if ok:
+                return JsonResponse({"status": ok}, safe=False)
+            else:
+                logger.error(f"Stash validation failed: {response}")
+                return JsonResponse({"error": response}, safe=False)
+        logger.warning(f"Wrong body in validate_stash: {body}")
+    return JsonResponse({"error": "Invalid request"}, status=400)
+
+
+def validate_torbox(request):
+    logger = logging.getLogger("torbox")
+    if request.method == "POST":
+        body = json.loads(request.body)
+        if "TORBOX_API" in body:
+            result = body
+            TORBOX_API = result.get("TORBOX_API", config.TORBOX_API)
+            TORBOX_SEARCH_API = result.get(
+                "TORBOX_SEARCH_API", config.TORBOX_SEARCH_API
+            )
+            TORBOX_API_KEY = result.get("TORBOX_API_KEY", config.TORBOX_API_KEY)
+            TORBOX_HOST = result.get("TORBOX_HOST", config.TORBOX_HOST)
+            ok, response, reason = validate_api(TORBOX_API, TORBOX_HOST, TORBOX_API_KEY)
+
+            logger.info(f"TorBox validation: {ok}, {response}")
+            if ok:
+                return JsonResponse({"status": ok}, safe=False)
+            else:
+                logger.error(f"TorBox validation failed: {response}")
+                return JsonResponse({"error": response, "reason": reason}, safe=False)
+        logger.warning(f"Wrong body in validate_torbox: {body}")
+    return JsonResponse({"error": "Invalid request"}, status=400)
+
+
+def validate_aria(request):
+    logger = logging.getLogger("torbox")
+    if request.method == "POST":
+        body = json.loads(request.body)
+        if "ARIA2_HOST" in body:
+            result = body
+            ARIA2_DIR = result.get("ARIA2_DIR", config.ARIA2_DIR)
+            WRONG_ARIA2_DIR = 1
+            if not Path(ARIA2_DIR).exists():
+                logger.error(f"ARIA2_DIR: {ARIA2_DIR} does not exist")
+                return JsonResponse(
+                    {
+                        "error": f"Aria validation failed: ARIA2_DIR: {ARIA2_DIR} doesn't exist or is not accessible",
+                        "reason": WRONG_ARIA2_DIR,
+                    },
+                    safe=False,
+                )
+            ARIA2_HOST = result.get("ARIA2_HOST", config.ARIA2_HOST)
+            ARIA2_PORT = result.get("ARIA2_PORT", config.ARIA2_PORT)
+            ARIA2_PASSWORD = result.get("ARIA2_PASSWORD", config.ARIA2_PASSWORD)
+            ok, response, reason = validate_aria_api(
+                ARIA2_HOST, ARIA2_PORT, ARIA2_PASSWORD
+            )
+
+            logger.info(f"Aria validation: {ok}, {response}")
+            if ok:
+                return JsonResponse({"status": ok}, safe=False)
+            else:
+                logger.error(f"Aria validation failed: {response}")
+                return JsonResponse({"error": response, "reason": reason}, safe=False)
+        logger.warning(f"Wrong body in validate_aria: {body}")
+    return JsonResponse({"error": "Invalid request"}, status=400)
+
+
+def test_ip(request):
+    logger = logging.getLogger("torbox")
+    result = requests.get("http://ip-api.com/json/?fields=status,message,query,isp,org")
+    # todo: add ip test for db_worker
+    if result.ok:
+        json_result = json.loads(result.content)
+        if json_result["status"] == "success":
+            logger.info(f"IP test success: {json_result}")
+            return JsonResponse(
+                {
+                    "status": "success",
+                    "ip": json_result["query"],
+                    "isp": json_result["isp"],
+                    "org": json_result["org"],
+                },
+                safe=False,
+            )
+        else:
+            logger.error(f"IP test failed: {json_result['message']}")
+            return JsonResponse(
+                {"error": f"IP test failed: {json_result['message']}"}, safe=False
+            )
+    else:
+        logger.error("Could not get result from ip-api.com")
+        return JsonResponse({"error": f"Could not connect to ip-api.com"}, safe=False)
+
+
+def validate_queue_folders(request):
+    logger = logging.getLogger("torbox")
+    if request.method == "POST":
+        body = json.loads(request.body)
+        if "QUEUE_DIR" in body:
+            result = body
+            QUEUE_DIR = result.get("QUEUE_DIR", config.QUEUE_DIR)
+
+            if not Path(QUEUE_DIR).exists():
+                logger.error(f"QUEUE_DIR: {QUEUE_DIR} does not exist")
+                return JsonResponse(
+                    {
+                        "error": f"Queue validation failed: QUEUE_DIR: {QUEUE_DIR} doesn't exist or is not accessible",
+                        "reason": 1,
+                    },
+                    safe=False,
+                )
+            for path, _ in get_queue_folders():
+                if not path.exists():
+                    logger.error(f"What sorcery is this? {path} does not exist")
+
+            return JsonResponse({"status": True}, safe=False)
+        logger.warning(f"Wrong body in validate_queue_folders: {body}")
+    return JsonResponse({"error": "Invalid request"}, status=400)
+
+
+def validate_transmission(request):
+    logger = logging.getLogger("torbox")
+    if request.method == "POST":
+        body = json.loads(request.body)
+        if "TRANSMISSION_HOST" in body:
+            result = body
+            TRANSMISSION_HOST = result.get(
+                "TRANSMISSION_HOST", config.TRANSMISSION_HOST
+            )
+            TRANSMISSION_PORT = result.get(
+                "TRANSMISSION_PORT", config.TRANSMISSION_PORT
+            )
+            TRANSMISSION_USER = result.get(
+                "TRANSMISSION_USER", config.TRANSMISSION_USER
+            )
+            TRANSMISSION_DIR = result.get("TRANSMISSION_DIR", config.TRANSMISSION_DIR)
+            TRANSMISSION_PASSWORD = result.get(
+                "TRANSMISSION_PASSWORD", config.TRANSMISSION_PASSWORD
+            )
+            TRANSMISSION_SFTP_HOST = result.get(
+                "TRANSMISSION_SFTP_HOST", config.TRANSMISSION_SFTP_HOST
+            )
+            TRANSMISSION_SFTP_PORT = result.get(
+                "TRANSMISSION_SFTP_PORT", config.TRANSMISSION_SFTP_PORT
+            )
+            TRANSMISSION_SFTP_USER = result.get(
+                "TRANSMISSION_SFTP_USER", config.TRANSMISSION_SFTP_USER
+            )
+            TRANSMISSION_SFTP_PASSWORD = result.get(
+                "TRANSMISSION_SFTP_PASSWORD", config.TRANSMISSION_SFTP_PASSWORD
+            )
+            from tor.tasks import validate_transmission_settings_task, wait_for_task
+
+            result = validate_transmission_settings_task.enqueue(
+                host=TRANSMISSION_HOST,
+                port=TRANSMISSION_PORT,
+                user=TRANSMISSION_USER,
+                password=TRANSMISSION_PASSWORD,
+                dir=TRANSMISSION_DIR,
+                sftp_host=TRANSMISSION_SFTP_HOST,
+                sftp_password=TRANSMISSION_SFTP_PASSWORD,
+                sftp_port=TRANSMISSION_SFTP_PORT,
+                sftp_user=TRANSMISSION_SFTP_USER,
+            )
+            ok, response, reason = wait_for_task(result)
+
+            logger.info(f"Transmission validation: {ok}, {response}")
+            if ok:
+                return JsonResponse({"status": ok}, safe=False)
+            else:
+                logger.error(f"Transmission validation failed: {response}")
+                return JsonResponse({"error": response, "reason": reason}, safe=False)
+        logger.warning(f"Wrong body in validate_Transmission: {body}")
+    return JsonResponse({"error": "Invalid request"}, status=400)
+
+
+def validate_folders(request):
+    logger = logging.getLogger("torbox")
+    if request.method == "POST":
+        body = json.loads(request.body)
+        if "TRANSMISSION_HOST" in body:
+            result = body
+            types = result.get("TORRENT_TYPES", {}).items()
+            logger.debug(types)
+            errors = []
+            folders_valid = {}
+            for type in types:
+                type = type[1]
+                logger.debug(f"Processing torrent type: {type}")
+                if type["action_on_finish"] == TorrentType.ACTION_DO_NOTHING:
+                    folders_valid[type["id"]] = True
+                elif "target_dir" in type and type["target_dir"] is not None:
+                    target_dir = Path(type["target_dir"])
+                    if not target_dir.exists():
+                        error = f"Target directory: {target_dir} does not exist"
+                        logger.error(error)
+                        folders_valid[type["id"]] = False
+                        errors.append(error)
+                    else:
+                        folders_valid[type["id"]] = True
+                else:
+                    error = f"Target directory for type '{type['name']}' is not set."
+                    logger.error(error)
+                    folders_valid[type["id"]] = False
+                    errors.append(error)
+
+            if errors:
+                return JsonResponse(
+                    {"error": "; ".join(errors), "folders_valid": folders_valid},
+                    safe=False,
+                )
+            else:
+                logger.info("All folders are valid")
+                return JsonResponse(
+                    {"status": "Ok", "folders_valid": folders_valid}, safe=False
+                )
+
+        logger.warning(f"Wrong body in validate_Transmission: {body}")
+    return JsonResponse({"error": "Invalid request"}, status=400)
+
+
+def add_torrent_from_search(request, id):
+    logger = logging.getLogger("torbox")
+    logger.info("Adding torrent")
+    result = add_torbox_torrent.enqueue(id)
+    result = queue_torbox_status()
+    logger.info("Task enqueued")
+    return JsonResponse({"request_id": result.id}, safe=False)
+
+
+def double_torrent_api(request, id):
+    logger = logging.getLogger("torbox")
+    logger.info("Doubling torrent")
+    result = double_torrent_task.enqueue(id)
+    logger.info("Task enqueued")
+    return JsonResponse({"request_id": result.id}, safe=False)
+
+
+def get_search_results(request, query, season=0, episode=0):
+    torrent = TorrentTorBoxSearch.objects.filter_by_query_season_episode(
+        query=query, season=season, episode=episode
+    ).order_by("-date")
+    if not torrent:
+        return JsonResponse({"torrents": {}}, safe=False)
+    result = TorrentTorBoxSearchResult.objects.filter(query=torrent[0]).order_by(
+        "-torrent", "-cached", "raw_title"
+    )
+    return JsonResponse(
+        {"torrents": [model_to_dict(entry) for entry in result]}, safe=False
+    )
+
+
+def get_torrents(
+    current: int = 0,
+    limit: int = 50,
+    state_id: int = 0,
+    torrent_type_id: int = 0,
+    client: str = "",
+    private=False,
+    tracker: str = "",
+    name: str = "",
+):
+    if client == "ALL":
+        client = ""
+    if private == "ALL":
+        private = None
+    torrent_with_latest_details = get_active_torrents_with_formatted_age(
+        current, limit, state_id, torrent_type_id, client, private, tracker, name
+    )
+    all_transmission_downloads = get_active_torrents_with_current_history(
+        client=TRANSMISSION_CLIENT,
+        statuses=[
+            TorrentStatus.objects.get_client_in_progress(),
+            TorrentStatus.objects.get_client_added(),
+            TorrentStatus.objects.get_client_init(),
+        ],
+    ).count()
+    all_torbox_downloads = get_active_torrents_with_current_history(
+        client=TORBOX_CLIENT
+    ).count()
+    visible_downloads = len(torrent_with_latest_details)
+    result = []
+    summary = {
+        "down": 0,
+        "up": 0,
+        "all_torbox_downloads": all_torbox_downloads,
+        "visible_downloads": visible_downloads,
+        "all_transmission_downloads": all_transmission_downloads,
+    }
+    trackers = set()
+    for torrent_instance in torrent_with_latest_details:
+        latest_history = None
+        if torrent_instance.latest_history_id:
+            latest_history = get_history_with_age(torrent_instance.latest_history_id)
+            latest_history.last_updated_ago = format_age(
+                latest_history.ago.total_seconds()
+            )
+        torrent_instance = shorten_torrent_name(torrent_instance)
+        summary["down"] += latest_history.download_speed
+        summary["up"] += latest_history.upload_speed
+
+        torrent = model_to_dict(torrent_instance)
+        torrent["formatted_age"] = torrent_instance.formatted_age
+        if torrent["tracker"]:
+            tracker = urlparse(torrent["tracker"]).hostname
+            torrent["tracker"] = tracker
+            trackers.add(tracker)
+
+        history = model_to_dict(latest_history)
+        history["last_updated_ago"] = latest_history.last_updated_ago
+        torrent["local_status"] = model_to_dict(torrent_instance.local_status)
+        torrent["local_status"]["level"] = model_to_dict(
+            torrent_instance.local_status.level
+        )
+        result.append(
+            {
+                "torrent": torrent,
+                "history": history,
+            }
+        )
+    return result, summary, trackers
+
+
+def update_queue_folders(request):
+    logger = logging.getLogger("torbox")
+    result = queue_import_from_queue_folders()
+    return JsonResponse({"request_id": result.id}, safe=False)
+
+
+def update_torrent_list(request):
+    logger = logging.getLogger("torbox")
+    result = check_status()
+    queue_scheduler()
+    return JsonResponse({"request_id": result.id}, safe=False)
+
+
+def get_torrent_type_list(request):
+    logger = logging.getLogger("torbox")
+    if request.method == "GET":
+        torrent_types = [model_to_dict(entry) for entry in TorrentType.objects.all()]
+        logger.info(f"Returning torrent types: {torrent_types}")
+        return JsonResponse({"torrent_types": torrent_types}, safe=False)
+    return JsonResponse({"error": "Invalid request method"}, status=400)
+
+
+def get_log_sources_list(request):
+    logger = logging.getLogger("torbox")
+    if request.method == "GET":
+        log_sources = [
+            model_to_dict(entry) for entry in LogSource.objects.all().order_by("name")
+        ]
+        log_sources.insert(0, {"id": 0, "name": "ALL"})
+        logger.info(f"Returning log sources: {log_sources}")
+        return JsonResponse({"log_sources": log_sources}, safe=False)
+    return JsonResponse({"error": "Invalid request method"}, status=400)
+
+
+def get_torrent_status_list(request):
+    logger = logging.getLogger("torbox")
+    if request.method == "GET":
+        torrent_states = [
+            model_to_dict(entry) for entry in TorrentStatus.objects.all().order_by("id")
+        ]
+        torrent_states.insert(0, {"id": 0, "name": "ALL"})
+        logger.info(f"Returning torrent status: {torrent_states}")
+        return JsonResponse({"torrent_status": torrent_states}, safe=False)
+    return JsonResponse({"error": "Invalid request method"}, status=400)
+
+
+def get_torrent_list(
+    request,
+    current: int,
+    limit: int,
+    state_id: int,
+    torrent_type_id: int,
+    client: str = "",
+    private: bool = False,
+    tracker: str = "",
+    name: str = "",
+):
+    logger = logging.getLogger("torbox")
+    if request.method == "GET":
+        result, summary, trackers = get_torrents(
+            current, limit, state_id, torrent_type_id, client, private, tracker, name
+        )
+        torrent_types = [model_to_dict(entry) for entry in TorrentType.objects.all()]
+        return JsonResponse(
+            {
+                "torrents": result,
+                "summary": summary,
+                "torrent_types": torrent_types,
+                "queue_size": get_queue_count(),
+                "trackers": sorted(list(trackers)),
+            },
+            safe=False,
+        )
+    return JsonResponse({"error": "Invalid request method"}, status=400)
+
+
+def get_allowed_client(entry: TorrentQueue):
+    if not config.USE_TRANSMISSION:
+        return TORBOX_CLIENT
+    if (
+        entry.torrent_private
+        and config.DOWNLOAD_PRIVATE_ON_TRANSMISSION_ONLY
+        and config.USE_TRANSMISSION
+    ):
+        return TRANSMISSION_CLIENT
+    if entry.torrent_type:
+        if (
+            entry.torrent_type.name == "No Type"
+            and not config.DOWNLOAD_NO_TYPE_ON_TRANSMISSION
+        ):
+            return TORBOX_CLIENT
+        if (
+            entry.torrent_type.name == "Home Videos"
+            and not config.DOWNLOAD_HOME_VIDEOS_TYPE_ON_TRANSMISSION
+        ):
+            return TORBOX_CLIENT
+        if (
+            entry.torrent_type.name == "Movies"
+            and not config.DOWNLOAD_MOVIE_TYPE_ON_TRANSMISSION
+        ):
+            return TORBOX_CLIENT
+        if (
+            entry.torrent_type.name == "Movie Series"
+            and not config.DOWNLOAD_MOVIE_SERIES_TYPE_ON_TRANSMISSION
+        ):
+            return TORBOX_CLIENT
+        if (
+            entry.torrent_type.name == "Audiobooks"
+            and not config.DOWNLOAD_AUDIOBOOKS_TYPE_ON_TRANSMISSION
+        ):
+            return TORBOX_CLIENT
+        if (
+            entry.torrent_type.name == "Ebooks"
+            and not config.DOWNLOAD_EBOOKS_TYPE_ON_TRANSMISSION
+        ):
+            return TORBOX_CLIENT
+        if (
+            entry.torrent_type.name == "Other"
+            and not config.DOWNLOAD_OTHER_TYPE_ON_TRANSMISSION
+        ):
+            return TORBOX_CLIENT
+    return f"{TRANSMISSION_CLIENT}/{TORBOX_CLIENT}"
+
+
+def api_get_active_queue(request):
+    logger = logging.getLogger("torbox")
+    if request.method == "GET":
+        result = get_active_queue(all=True)
+        queue = [
+            {
+                "id": entry.id,
+                "magnet": get_name_from_magnet(entry.magnet),
+                "torrent_file": entry.torrent_file_name,
+                "added_at": entry.added_at.isoformat(),
+                "priority": entry.priority,
+                "torrent_type_id": entry.torrent_type.id,
+                "allowed_client": get_allowed_client(entry),
+            }
+            for entry in result
+        ]
+        return JsonResponse(
+            {"queue": queue},
+            safe=False,
+        )
+    return JsonResponse({"error": "Invalid request method"}, status=400)
+
+
+def change_torrent_api(request, action, id, delete_files=False):
+    logger = logging.getLogger("torbox")
+    actions = ["delete", "reannounce", "resume"]
+    if action not in actions:
+        logger.warning(f"Wrong action: {action}")
+        return JsonResponse(
+            {"error": f'Invalid action: {action}, known are: {",".join(actions)}'},
+            status=400,
+        )
+    if request.method == "GET":
+        if action == "delete":
+            torrent = Torrent.objects.get(pk=id)
+            torrent.deleted = True
+            torrent.save()
+            logger.debug(f"Torrent: {torrent} internally deleted")
+        result = change_torrent_task.enqueue(action, id, delete_files)
+        return JsonResponse({"request_id": result.id}, safe=False)
+    return JsonResponse({"error": "Invalid request method"}, status=400)
+
+
+def add_torrent_api(request):
+    logger = logging.getLogger("torbox")
+    if request.method == "POST":
+        body = json.loads(request.body)
+        if "client" in body and "magnet" in body and "torrent_type_id" in body:
+            result = add_magnet.enqueue(
+                body["client"], body["magnet"], body["torrent_type_id"]
+            )
+            return JsonResponse({"request_id": result.id}, safe=False)
+        logger.warning(f"Wrong body in add_torrent_api: {body}")
+    return JsonResponse({"error": "Invalid request"}, status=400)
+
+
+def download_torrent_files(request, id):
+    result = torbox_request_torrent_files.enqueue(id)
+    return JsonResponse({"request_id": result.id}, safe=False)
+
+
+def update_torrent_type(request, torrent_id, torrent_type_id):
+    logger = logging.getLogger("torbox")
+    logger.info(f"Updating torrent type: {torrent_type_id} for torrent: {torrent_id}")
+    torrent_type = TorrentType.objects.get(pk=torrent_type_id)
+    Torrent.objects.filter(pk=torrent_id).update(
+        torrent_type=torrent_type
+    )  # filter has update
+    return JsonResponse({"response": True}, safe=False)
+
+
+def update_torrent_type_in_queue(request, queue_id, torrent_type_id):
+    logger = logging.getLogger("torbox")
+    logger.info(f"Updating torrent type: {torrent_type_id} for queue: {queue_id}")
+    torrent_type = TorrentType.objects.get(pk=torrent_type_id)
+    TorrentQueue.objects.filter(pk=queue_id).update(torrent_type=torrent_type)
+    return JsonResponse({"response": True}, safe=False)
+
+
+def check_task_status_api(request, task_id):
+    logger = logging.getLogger("torbox")
+    logger.info(f"Checking task status: {task_id}")
+    result = default_task_backend.get_result(task_id)
+    if result and result.is_finished:
+        logger.info(f"Task {task_id} is finished")
+        return JsonResponse({"status": "DONE"}, safe=False)
+    elif result:
+        logger.info(f"Task {task_id} status: {result.status}")
+    return JsonResponse({"status": "IN_PROGRESS"}, safe=False)
+
+
+def add_torrent_to_queue(request):
+    logger = logging.getLogger("torbox")
+    if request.method == "POST":
+        body = json.loads(request.body)
+        if (
+            "torrent_file" in body
+            and "torrent_type_id" in body
+            and "private" in body
+            and "torrent_file_name" in body
+        ):
+            torrent_type = TorrentType.objects.get(pk=body["torrent_type_id"])
+
+            result = TorrentQueue.objects.create(
+                torrent_file=base64.b64decode(body["torrent_file"]),
+                torrent_type=torrent_type,
+                torrent_private=body["private"],
+                torrent_file_name=body["torrent_file_name"],
+            )
+            logger.info(f"Torrent added to queue: {result}")
+            return JsonResponse({"status": "Ok"}, safe=False)
+        logger.warning(f"Wrong body in add_torrent_to_queue: {body}")
+    return JsonResponse({"error": "Invalid request"}, status=400)

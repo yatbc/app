@@ -94,12 +94,12 @@ urlpatterns = [
         "api/update_torrent_list", views.update_torrent_list, name="update_torrent_list"
     ),
     path(
-        "api/get_torrents_list/<int:current>/<int:limit>/<int:state_id>/<int:torrent_type_id>/<client>/<private>/<name>",
+        "api/get_torrents_list/<int:current>/<int:limit>/<int:state_id>/<int:torrent_type_id>/<client>/<private>/<tracker>/<name>",
         views.get_torrent_list,
         name="get_torrents_list",
     ),
     path(
-        "api/get_torrents_list/<int:current>/<int:limit>/<int:state_id>/<int:torrent_type_id>/<client>/<private>",
+        "api/get_torrents_list/<int:current>/<int:limit>/<int:state_id>/<int:torrent_type_id>/<client>/<private>/<tracker>",
         views.get_torrent_list,
         name="get_torrents_list",
     ),
@@ -109,7 +109,7 @@ urlpatterns = [
         name="get_torrent_status_list",
     ),
     path(
-        "api/change_torrent/<action>/<int:id>",
+        "api/change_torrent/<action>/<int:id>/<int:delete_files>",
         views.change_torrent_api,
         name="change_torrent_api",
     ),
@@ -125,6 +125,11 @@ urlpatterns = [
     ),
     path("torrent_details/<int:id>", views.torrent_details, name="torrent_details"),
     path("add_torrent", views.add_torrent, name="add_torrent"),
+    path(
+        "api/add_torrent_to_queue",
+        views.add_torrent_to_queue,
+        name="add_torrent_to_queue",
+    ),
     path("api/add_torrent", views.add_torrent_api, name="add_torrent_api"),
     path("api/validate_torbox", views.validate_torbox, name="validate_torbox"),
     path("api/validate_aria", views.validate_aria, name="validate_aria"),
@@ -197,6 +202,36 @@ urlpatterns = [
         views.get_torrent_seeders_history,
         name="get_torrent_seeders",
     ),
+    path(
+        "api/get_torrent_ratio_history/<int:id>",
+        views.get_torrent_ratio_history,
+        name="get_torrent_ratio",
+    ),
     path("api/get_torrent_log/<int:id>", views.get_torrent_log, name="get_torrent_log"),
+    path(
+        "api/get_advanced_search_results/<int:current>/<int:limit>/<int:type_id>/<query>/<title>/<extra_query>",
+        views.get_advanced_search_results_api,
+        name="get_advanced_search_results_api",
+    ),
+    path(
+        "advanced_search",
+        views.advanced_search,
+        name="advanced_search",
+    ),
+    path(
+        "api/start_advanced_search/<int:type_id>/<query>",
+        views.start_advanced_search_api,
+        name="start_advanced_search_api",
+    ),
+    path(
+        "api/start_advanced_search/<int:type_id>",
+        views.start_advanced_search_api,
+        name="start_advanced_search_api",
+    ),
+    path(
+        "api/download_file_from_advanced_search/<int:id>",
+        views.download_file_from_advanced_search,
+        name="download_file_from_advanced_search",
+    ),
     path("arr", views.arr, name="arr"),
 ]

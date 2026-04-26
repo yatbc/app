@@ -30,6 +30,8 @@
                     "1080p,720p,ANY", will prefer 1080p over 720p, but will accept any quality. Similar for encoder
                     and include_words.
                 </li>
+                <li>Skip full season, if you know that the movie series has not finished season, it can skip falsely
+                    marked torrents as containing full season.</li>
                 <li>Lower and upper case doesn't matter. So <i>ENCODER</i> is the same as <i>encoder</i>.</li>
                 <li>Words in any parameter are treated as words. Example: if you will specify quality as "1080p, 720p"
                     and one of the matches will be Test.x1080p.720p.mp4, then it will be threated as match with 720p
@@ -71,6 +73,7 @@
                     <th scope="col">Episode</th>
                     <th scope="col">Last check</th>
                     <th scope="col">Last found</th>
+                    <th scope="col" class="d-none d-lg-table-cell">Skip full season</th>
                     <th scope="col" class="d-none d-lg-table-cell">Encoders</th>
                     <th scope="col" class="d-none d-lg-table-cell">Qualities</th>
                     <th scope="col" class="d-none d-lg-table-cell">Include</th>
@@ -98,7 +101,8 @@
                             <td x-text="entry.requested_season"></td>
                             <td x-text="entry.requested_episode"></td>
                             <td x-text="entry.last_checked_ago"></td>
-                            <td x-text="entry.last_found_ago"></td>
+                            <td x-text="entry.last_found_ago" class="d-none d-lg-table-cell"></td>
+                            <td x-text="entry.skip_full_season"></td>
                             <td x-text="entry.encoder" class="d-none d-lg-table-cell truncate-text-cell"></td>
                             <td x-text="entry.quality" class="d-none d-lg-table-cell truncate-text-cell"></td>
                             <td x-text="entry.include_words" class="d-none d-lg-table-cell truncate-text-cell"></td>
@@ -120,14 +124,14 @@
                 </template>
                 <template x-if="arr.length === 0 && !isLoading">
                     <tr>
-                        <td colspan="11" class="text-center text-muted py-3">
+                        <td colspan="12" class="text-center text-muted py-3">
                             No movie series monitoring found.
                         </td>
                     </tr>
                 </template>
                 <template x-if="arr.length === 0 && isLoading">
                     <tr>
-                        <td colspan="11" class="text-center text-muted py-3">
+                        <td colspan="12" class="text-center text-muted py-3">
                             Loading movie series monitoring...
                         </td>
                     </tr>

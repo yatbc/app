@@ -8,6 +8,10 @@
             </div>
             <div class="modal-body py-4">
                 <p x-html="dialogConfirmBody" class="text-break"></p>
+                <label for="form-check-input" class="form-label" x-show="dialogConfirmShowCheckBox"
+                    x-text="dialogConfirmCheckBoxText"></label>
+                <input class="form-check-input" type="checkbox" id="checkbox_input" x-show="dialogConfirmShowCheckBox"
+                    x-model="dialogConfirmCheckBoxValue"></input>
             </div>
             <div class="modal-footer d-flex justify-content-end w-100 gap-2 pb-3 border-top-0">
                 <button type="button" class="btn btn-lg btn-secondary" @click="showModal = false">

@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from django.test import TestCase, override_settings
 from ..models import (
     Torrent,
@@ -30,19 +32,19 @@ class RequestDlLinkMgrTests(TestCase):
         )
         self.no_type = TorrentType.objects.get(name="No Type")
 
-    def test_ok_request_dl(self):
+    def test_ok_request_one_dl_link(self):
         # Arrange
         aria_api = unittest.mock.Mock()
         aria_internal_id = "fake_aria_id"
         aria_api.download_file.return_value = (True, aria_internal_id)
 
-        api = unittest.mock.Mock()
-        url = "http://test"
-        api.request_download_link.return_value = url
-
         torrent = create_torrent(self.no_type, local_download=False)
         path = f"{config.ARIA2_DIR}/{prepare_torrent_dir_name(torrent.name)}"
         file = create_torrent_file(torrent=torrent)
+
+        api = unittest.mock.Mock()
+        url = "http://test"
+        api.request_download_links.return_value = [(url, file)]
 
         status_mgr = StatusMgr.get_instance()
 
@@ -61,7 +63,49 @@ class RequestDlLinkMgrTests(TestCase):
         aria_api.download_file.assert_called_once_with(
             link=url, target_name=file.short_name, target_folder=path, torrent=torrent
         )
-        api.request_download_link.assert_called_once_with(torrent=torrent, file=file)
+        api.request_download_links.assert_called_once_with(torrent=torrent)
+        torrent = Torrent.objects.get(id=torrent.id)
+        self.assertTrue(torrent.local_download)
+        file = TorrentFile.objects.get(torrent=torrent)
+        self.assertEqual(file.aria.internal_id, aria_internal_id)
+
+    def test_ok_request_one_dl_link_with_none_as_short_name(self):
+        # Arrange
+        aria_api = unittest.mock.Mock()
+        aria_internal_id = "fake_aria_id"
+        aria_api.download_file.return_value = (True, aria_internal_id)
+
+        torrent = create_torrent(self.no_type, local_download=False)
+        path = f"{config.ARIA2_DIR}/{prepare_torrent_dir_name(torrent.name)}"
+        file = create_torrent_file(
+            torrent=torrent, short_name=None, name="Fake/Path/To/File"
+        )
+
+        api = unittest.mock.Mock()
+        url = "http://test"
+        api.request_download_links.return_value = [(url, file)]
+
+        status_mgr = StatusMgr.get_instance()
+
+        # Act
+        request_dl_link(
+            torrent.id,
+            api=api,
+            aria_api=aria_api,
+            status_mgr=status_mgr,
+            aria_dir=config.ARIA2_DIR,
+            client=TORBOX_CLIENT,
+            source=LogSource.objects.get_torbox_api(),
+        )
+
+        # Assert
+        aria_api.download_file.assert_called_once_with(
+            link=url,
+            target_name=Path(file.name).name,
+            target_folder=path,
+            torrent=torrent,
+        )
+        api.request_download_links.assert_called_once_with(torrent=torrent)
         torrent = Torrent.objects.get(id=torrent.id)
         self.assertTrue(torrent.local_download)
         file = TorrentFile.objects.get(torrent=torrent)

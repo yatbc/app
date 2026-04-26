@@ -82,6 +82,9 @@ function commonDialogs() {
     showModal: false,
     dialogConfirmBody: "",
     dialogConfirmHeader: "",
+    dialogConfirmCheckBoxText: "",
+    dialogConfirmShowCheckBox: false,
+    dialogConfirmCheckBoxValue: false,
     dialogConfirmCallback: () => { },
   }
 }
@@ -278,9 +281,7 @@ function commonPagination() {
     paginationNewDataCallback: () => { },
     paginationErrorCallback: () => { },
     ...commonCallApi(),
-    loadPreviousPageCallback() {
-      this.currentIndex -= this.step;
-      api = this.paginatedPageApi + "/" + this.currentIndex + "/" + this.step + this.extraFilter
+    loadPaginationData(api) {
       this.callApi(
         api,
         "",
@@ -290,17 +291,20 @@ function commonPagination() {
         this.paginationNewDataCallback,
         this.paginationNewDataCallback);
     },
+    loadFrontCallback() {
+      this.currentIndex = 0;
+      api = this.paginatedPageApi + "/" + this.currentIndex + "/" + this.step + this.extraFilter
+      this.loadPaginationData(api);
+    },
+    loadPreviousPageCallback() {
+      this.currentIndex -= this.step;
+      api = this.paginatedPageApi + "/" + this.currentIndex + "/" + this.step + this.extraFilter
+      this.loadPaginationData(api);
+    },
     loadNextPageCallback() {
       this.currentIndex += this.step;
       api = this.paginatedPageApi + "/" + this.currentIndex + "/" + this.step + this.extraFilter
-      this.callApi(
-        api,
-        "",
-        "",
-        "GET",
-        null,
-        this.paginationNewDataCallback,
-        this.paginationNewDataCallback);
+      this.loadPaginationData(api);
     },
     reloadPagination() {
       api = this.paginatedPageApi + "/" + this.currentIndex + "/" + this.step + this.extraFilter

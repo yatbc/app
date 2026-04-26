@@ -5,6 +5,7 @@ function getData() {
 
     torrents: [],
     summary: [],
+    trackers: [],
     torrent_types: [],
     queue_size: 0,
     selectedTorrentStatusId: Alpine.$persist(0).as('selectedTorrentStatusId'),
@@ -12,6 +13,7 @@ function getData() {
     selectedClient: Alpine.$persist("ALL").as('selectedClient'),
     selectedPrivateStatus: Alpine.$persist("ALL").as('selectedPrivateStatus'),
     selectedName: Alpine.$persist("").as('selectedName'),
+    selectedTracker: Alpine.$persist("ALL").as('selectedTracker'),
     torrent_statuses: [],
     torrent_types_filter: [],
 
@@ -40,15 +42,19 @@ function getData() {
         });
     },
     filterByName(name) {
-      this.selectedName = name;
+      this.selectedName = name.trim();
       this.fetchData();
     },
     updateFilters() {
       if (this.selectedName == "") {
-        this.extraFilter = `/${this.selectedTorrentStatusId}/${this.selectedTorrentTypeId}/${this.selectedClient}/${this.selectedPrivateStatus}`;
+        this.extraFilter = `/${this.selectedTorrentStatusId}/${this.selectedTorrentTypeId}/${this.selectedClient}/${this.selectedPrivateStatus}/${this.selectedTracker}`;
       } else {
-        this.extraFilter = `/${this.selectedTorrentStatusId}/${this.selectedTorrentTypeId}/${this.selectedClient}/${this.selectedPrivateStatus}/${this.selectedName}`;
+        this.extraFilter = `/${this.selectedTorrentStatusId}/${this.selectedTorrentTypeId}/${this.selectedClient}/${this.selectedPrivateStatus}/${this.selectedTracker}/${this.selectedName}`;
       }
+    },
+    filterByTracker(tracker) {
+      this.selectedTracker = tracker;
+      this.fetchData();
     },
     filterByPrivateStatus(private) {
       this.selectedPrivateStatus = private;
@@ -85,10 +91,14 @@ function getData() {
         }
         this.torrents = data.torrents;
         this.summary = data.summary;
+        if (data.trackers.length > this.trackers.length) {//fixme: move trackers to separate tables
+          this.trackers = data.trackers;
+        }
         this.queue_size = data.queue_size
         this.pageCurrentItems = this.torrents.length;
         console.log(this.torrents);
         console.log(this.torrent_types);
+        console.log(this.summary);
         this.updateTooltips();
       }
       this.updateTorrentList();
@@ -98,8 +108,8 @@ function getData() {
         this.updateTorrentList();
       }, 60000);
     },
-    changeTorrent(action, id) {
-      this.callApi("/api/change_torrent/" + action + "/" + id);
+    changeTorrent(action, id, delete_files = 0) {
+      this.callApi("/api/change_torrent/" + action + "/" + id + "/" + delete_files);
     },
     handleSelection(torrentId, newTorrentTypeId) {
       console.log(
@@ -118,9 +128,15 @@ function getData() {
     deleteTorrent(id, index) {
       this.dialogConfirmBody = "Are you sure you want to delete:<br/>'" + this.torrents[index].torrent.name + "'?";
       this.dialogConfirmHeader = "Confirm delete";
+      if (this.torrents[index].torrent.client == "Transmission") {
+        this.dialogConfirmShowCheckBox = true;
+        this.dialogConfirmCheckBoxValue = false;
+        this.dialogConfirmCheckBoxText = "Also delete downloaded data on remote client";
+      }
+
       this.dialogConfirmCallback = () => {
         this.showAlert("Torrent scheduled for deletion");
-        this.changeTorrent("delete", id);
+        this.changeTorrent("delete", id, this.dialogConfirmCheckBoxValue ? 1 : 0);
         this.torrents.splice(index, 1);
       };
       this.showModal = true;

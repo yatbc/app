@@ -1,0 +1,134 @@
+{% include 'includes/theme.html' %}
+{% load static %}
+{% include 'includes/head.html' %}
+<script src="{% static 'js/advanced_search.js' %}"></script>
+</head>
+
+<body>
+
+    {% include 'includes/navbar.html' %}
+    {% csrf_token %}
+
+
+    <h1>Advanced torrent search</h1>
+    <div x-data="getData()">
+        {% include 'includes/alert.html' %}
+        {% include 'includes/confirm.html' %}
+        {% include 'includes/wait.html' %}
+        {% include 'includes/pagination.html' %}
+        {% include 'includes/dragons.html' %}
+        <div class="mb-3">
+            <label for="search_title" class="form-label">
+                Title:
+            </label>
+            <input class="form-control" id="search_title" type="text" x-model="searchTitle"
+                @input="filterByQuery($event.target.value)" />
+        </div>
+        <div class="mb-3">
+            <label for="torrent_type" class="form-label">
+                Torrent Type:
+            </label>
+            <select id="torrent_type" class="form-select" @change="filterByTorrentType($event.target.value)">
+                <template x-for="item in torrent_types" :key="item.id">
+                    <option :value="item.id" x-text="item.name" :selected="item.id == selectedTorrentTypeIdSearch">
+                    </option>
+                </template>
+            </select>
+        </div>
+        <div class="mb-3">
+            <button class="btn btn-primary" @click="performSearch()">Search</button>
+        </div>
+        <table class="table table-responsive">
+            <thead>
+                <tr>
+                    <th scope="col">Title</th>
+                    <th scope="col">Grabs</th>
+                    <th scope="col">Seeds</th>
+                    <th scope="col">Peers</th>
+                    <th scope="col">Indexer</th>
+                    <th scope="col">Published</th>
+                    <th scope="col">Cached</th>
+                    <th scope="col">Tags</th>
+                    <th scope="col">Extra</th>
+                    <th scope="col">Add</th>
+                </tr>
+
+            </thead>
+            <tbody>
+                <tr><!--Filters-->
+                    <td>
+                        <input type="text" class="form-control flex-grow-1" placeholder="Search by title..."
+                            x-model="selectedTitle" @input="filterByTitle($event.target.value)" />
+                    </td>
+                    <td></td>
+                    <td></td>
+                    <td></td>
+                    <td></td>
+                    <td></td>
+                    <td></td>
+                    <td></td>
+                    <td>
+                        <input type="text" class="form-control flex-grow-1" placeholder="Search by extra..."
+                            x-model="selectedExtra" @input="filterByExtra($event.target.value)" />
+                    </td>
+                    <td></td>
+                </tr>
+                <template x-if="search.length === 0 && !isLoading">
+                    <tr>
+                        <td colspan="10" class="text-center text-muted py-3">
+                            No search results, search some to get started!
+                        </td>
+                    </tr>
+                </template>
+                <template x-if="search.length === 0 && isLoading">
+                    <tr>
+                        <td colspan="10" class="text-center text-muted py-3">
+                            Loading data, please wait...
+                        </td>
+                    </tr>
+                </template>
+
+            </tbody>
+
+
+            <template x-for="item in search" :key="index">
+                <tbody>
+                    <tr>
+                        <td x-text="item.full_title" :class="{
+                    'text-success': item.torbox_cached && !(item.torrent || item.queue),                    
+                    'text-warning': (item.torrent || item.queue),                    
+                    'text-primary': !((item.torrent || item.queue) && !item.torbox_cached),
+                    'truncate-text-cell':true                    
+                } "></td>
+                        <td x-text="item.grabs"></td>
+                        <td x-text="item.seeders"></td>
+                        <td x-text="item.peers"></td>
+                        <td x-text="item.indexer"></td>
+                        <td x-text="item.published_date"></td>
+                        <td x-text="item.torbox_cached"></td>
+                        <td x-text="item.tags"></td>
+                        <td x-text="item.extra"></td>
+                        <td>
+                            <button type="button" class="btn btn-outline-primary btn-sm"
+                                @click="downloadFile(item.id)">Download
+                            </button>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td>
+                            <image :src="item.cover_url" class="img-thumbnail" width="300px"></image>
+                        </td>
+                        <td colspan="9" x-text="item.description"></td>
+                    </tr>
+                </tbody>
+
+            </template>
+
+
+        </table>
+
+    </div>
+
+</body>
+
+</html>

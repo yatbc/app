@@ -21,8 +21,11 @@
         <div class="mb-3 d-flex">
             <button class="btn btn-primary" @click="showAddTorrent()">Add torrent</button>
 
-            <div class="col-md-2 col-sm-5 fw-bold">Entries in queue:</div>
-            <div class="col-md-2 col-sm-2" x-text="queue_size"></div>
+            <div class=" col-md-2 col-sm-5 fw-bold" x-text="'Entries in queue: ' + queue_size"></div>
+            <div class=" col-md-3 col-sm-5 fw-bold"
+                x-text="'Visible downloads/All TorBox/Transmission active: ' + summary.visible_downloads + '/' + summary.all_torbox_downloads + '/' + summary.all_transmission_downloads">
+            </div>
+
 
         </div>
         <table class="table table-responsive">
@@ -32,12 +35,13 @@
                     <th scope="col" width="230">Status</th>
                     <th scope="col">Details</th>
                     <th scope="col" class="d-none d-lg-table-cell">Size</th>
-                    <th scope="col" class="d-none d-lg-table-cell">Ratio</th>
+                    <th scope="col" class="d-none d-lg-table-cell">Tracker</th>
+                    <th scope="col">Ratio</th>
                     <th scope="col" class="d-none d-lg-table-cell">Seeds</th>
                     <th scope="col" class="d-none d-lg-table-cell">Peers</th>
                     <th scope="col">Age</th>
                     <th scope="col">Updated</th>
-                    <th scope="col">Availability</th>
+                    <th scope="col" class="d-none d-lg-table-cell">Availability</th>
                     <th scope="col">Actions</th>
                 </tr>
 
@@ -76,16 +80,26 @@
                             </select>
 
                             <input type="text" class="form-control flex-grow-1" placeholder="Search by name..."
-                                @input="filterByName($event.target.value)" />
+                                x-model="selectedName" @input="filterByName($event.target.value)" />
                         </div>
                     </td>
+                    <td class="d-none d-lg-table-cell"></td>
+                    <td class="d-none d-lg-table-cell">
+                        <select class="form-select" x-model="selectedTracker"
+                            @change="filterByTracker($event.target.value)">
+                            <option value="ALL" :selected="'ALL' == selectedTracker">ALL</option>
+                            <template x-for="item in trackers" :key="item">
+                                <option :value="item" x-text="item" :selected="item == selectedTracker">
+                                </option>
+                            </template>
+                        </select>
+                    </td>
+                    <td></td>
+                    <td class="d-none d-lg-table-cell"></td>
+                    <td class="d-none d-lg-table-cell"></td>
                     <td></td>
                     <td></td>
-                    <td></td>
-                    <td></td>
-                    <td></td>
-                    <td></td>
-                    <td></td>
+                    <td class="d-none d-lg-table-cell"></td>
                     <td>
                         <select class="form-select" @change="filterByTorrentType($event.target.value)">
                             <template x-for="item in torrent_types_filter" :key="item.id">
@@ -98,14 +112,14 @@
                 </tr>
                 <template x-if="torrents.length === 0 && !isLoading">
                     <tr>
-                        <td colspan="11" class="text-center text-muted py-3">
+                        <td colspan="12" class="text-center text-muted py-3">
                             No torrents, add some to get started!
                         </td>
                     </tr>
                 </template>
                 <template x-if="torrents.length === 0 && isLoading">
                     <tr>
-                        <td colspan="11" class="text-center text-muted py-3">
+                        <td colspan="12" class="text-center text-muted py-3">
                             Loading data, please wait...
                         </td>
                     </tr>
@@ -143,6 +157,11 @@
                                         Cached
                                     </div>
                                 </template>
+                                <template x-if="entry.torrent.doubled">
+                                    <div class="btn btn-info btn-sm disabled" role="status" aria-disabled="true">
+                                        Doubled
+                                    </div>
+                                </template>
                                 <a :class="{
                                         'link-success': entry.torrent.download_finished,
                                         'link-primary': entry.history.seeds > 0,
@@ -156,8 +175,8 @@
                         <!--      <td x-text="entry.torrent.download_finished"></td>-->
                         <!--      <td x-text="entry.torrent.total_downloaded"></td>-->
                         <td x-text="formatBytes(entry.torrent.size)" class="d-none d-lg-table-cell"></td>
-                        <!--      <td x-text="entry.torrent.total_uploaded"></td>-->
-                        <td x-text="entry.history.ratio" class="d-none d-lg-table-cell"></td>
+                        <td x-text="entry.torrent.tracker" class="d-none d-lg-table-cell"></td>
+                        <td x-text="entry.history.ratio"></td>
                         <td :class="{                    
                     'text-danger': entry.history.seeds == 0 && entry.torrent.download_finished === false,                    
                     '': !(entry.history.seeds == 0 && entry.torrent.download_finished === false),
@@ -168,7 +187,7 @@
                         <td :class="{                    
                     'text-danger': entry.history.availability < 1 && entry.torrent.download_finished === false,                    
                     '': !(entry.history.availability < 1 && entry.torrent.download_finished === false),
-                }" x-text="entry.history.availability"></td>
+                }" x-text="entry.history.availability" class="d-none d-lg-table-cell"></td>
 
                         <td>
                             <div class="d-flex">
@@ -210,7 +229,7 @@
                         </td>
                     </tr>
                     <tr>
-                        <td colspan="11">
+                        <td colspan="12">
                             <template x-if="entry.torrent.local_download">
                                 <div class="progress">
                                     <div :class="{

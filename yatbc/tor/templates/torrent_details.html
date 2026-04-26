@@ -118,11 +118,38 @@
       <div class="tab-pane fade" id="charts" role="tabpanel" aria-labelledby="charts-tab">
         <h2>Charts</h2>
         {% include 'includes/dragons.html' %}
-        <div style="width: 600px; height: 400px;">
-          <canvas id="torrentSpeedHistory"></canvas>
+        <div class="container-fluid">
+          <div class="row">
+            <div class="col-12 col-lg-10 mx-auto">
+
+              <div style="position: relative; height: 300px; min-height: 300px;">
+                <canvas id="torrentRatioHistory"></canvas>
+              </div>
+
+            </div>
+          </div>
         </div>
-        <div style="width: 600px; height: 400px;">
-          <canvas id="torrentSeedersHistory"></canvas>
+        <div class="container-fluid">
+          <div class="row">
+            <div class="col-12 col-lg-10 mx-auto">
+
+              <div style="position: relative; height: 300px; min-height: 300px;">
+                <canvas id="torrentSeedersHistory"></canvas>
+              </div>
+
+            </div>
+          </div>
+        </div>
+        <div class="container-fluid">
+          <div class="row">
+            <div class="col-12 col-lg-10 mx-auto">
+
+              <div style="position: relative; height: 300px; min-height: 300px;">
+                <canvas id="torrentSpeedHistory"></canvas>
+              </div>
+
+            </div>
+          </div>
         </div>
       </div>
 

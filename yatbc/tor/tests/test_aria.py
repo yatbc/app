@@ -117,6 +117,27 @@ class AriaApiTests(TestCase):
         aria = AriaDownloadStatus.objects.get(internal_id=aria_id)
         self.assertAlmostEqual(aria.progress, 0.09166666)
 
+    def test_failed_update_status(self):
+        aria_id = "12345"
+        aria = AriaDownloadStatus.objects.create(
+            path="/aria2/a.a",
+            progress=0,
+            done=False,
+            error="",
+            status="",
+            internal_id=aria_id,
+        )
+        _ = create_torrent_file(create_torrent(self.test_type), aria=aria)
+
+        api = unittest.mock.Mock()
+        api.tellStatus.return_value = (False, None)
+
+        update_status(aria_internal_id=aria_id, api=api)
+
+        api.tellStatus.assert_called_once_with(aria_id)
+        aria = AriaDownloadStatus.objects.get(internal_id=aria_id)
+        self.assertEqual(aria.status, "error")
+
 
 if __name__ == "__main__":
     unittest.main()

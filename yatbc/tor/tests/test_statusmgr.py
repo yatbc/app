@@ -1,5 +1,5 @@
 from django.test import TestCase, override_settings
-from ..models import Torrent, TorrentFile, TorrentType, AriaDownloadStatus
+from ..models import Torrent, TorrentFile, TorrentType, AriaDownloadStatus, LogSource
 from ..statusmgr import StatusMgr
 import unittest
 import shutil
@@ -158,7 +158,7 @@ class StatusMgrTests(TestCase):
         self.assertIsNotNone(torrent.finished_at)
         self.assertTrue(torrent.local_download_finished)
 
-    def test_force_transition_in_client_done(self):
+    def test_force_transition_in_client_progress(self):
         status_mgr = StatusMgr.get_instance()
         torrent = create_torrent(torrent_type=self.no_type)
         aria = AriaDownloadStatus.objects.create(
@@ -171,16 +171,12 @@ class StatusMgrTests(TestCase):
         status_mgr.torrent_done(torrent, skipped_download=True)
         self.assertEqual(torrent.local_status, status_mgr.finish_done)
         self.assertEqual(
-            get_files_ready_to_download(torrent_files=[file], source=None), []
+            get_files_ready_to_download(
+                torrent_files=[file], source=LogSource.objects.get_status_mgr()
+            ),
+            [],
         )
-        request_torrent_files_mock = unittest.mock.Mock()
-        status_mgr.force_transition_in_client_done(
-            torrent, request_torrent_files=request_torrent_files_mock
-        )
+        status_mgr.force_transition_in_client_progress(torrent)
 
-        request_torrent_files_mock.enqueue.assert_called_once_with(torrent.id)
-        file.refresh_from_db()
-        self.assertEqual(
-            get_files_ready_to_download(torrent_files=[file], source=None), [file]
-        )
-        self.assertEqual(torrent.local_status, status_mgr.client_done)
+        self.assertEqual(TorrentFile.objects.filter(torrent=torrent).count(), 0)
+        self.assertEqual(torrent.local_status, status_mgr.client_progress)

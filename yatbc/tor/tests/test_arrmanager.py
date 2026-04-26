@@ -38,6 +38,7 @@ class ArrManagerTests(TestCase):
         last_checked=None,
         exclude_words=None,
         include_words=None,
+        skip_full_season=False,
     ):
         arr = ArrMovieSeries.objects.create(
             imdbid=imdbid,
@@ -51,6 +52,7 @@ class ArrManagerTests(TestCase):
             last_checked=last_checked,
             exclude_words=exclude_words,
             include_words=include_words,
+            skip_full_season=skip_full_season,
         )
         return arr
 
@@ -349,6 +351,54 @@ class ArrManagerTests(TestCase):
     @patch(target="tor.arrmanager.get_api")
     @patch(target="tor.arrmanager.search_torrent")
     @patch(target="tor.arrmanager.add_torrent_by_magnet")
+    def test_skip_full_season(
+        self, add_torrent_by_magnet: Mock, search_torrent: Mock, get_api: Mock
+    ):
+        api = Mock()
+        get_api.return_value = api
+
+        expected_imdbid = "tt0000001"
+        expected_quality = "1080p"
+        expected_encoder = "TestEncoder"
+        expected_title = "Test.Movie.Series"
+        expected_season = 1
+        expected_episode = 2
+
+        search = create_search(
+            query=expected_imdbid,
+            season=expected_season,
+            episode=None,
+            raw_title=f"{expected_title}.{expected_quality}.{expected_encoder}.S{expected_season}",
+            title=expected_title,
+        )
+        arr = self._create_arr(
+            imdbid=expected_imdbid,
+            title=None,
+            quality=expected_quality,
+            encoder=expected_encoder,
+            season=expected_season,
+            episode=expected_episode,
+            skip_full_season=True,
+        )
+        search_torrent.return_value = search.query
+
+        result, status = process_arr(arr.id)
+        self.assertFalse(status)
+
+        search_torrent.assert_called_once_with(
+            query=expected_imdbid,
+            season=expected_season,
+            episode=expected_episode,
+            api=api,
+        )
+        self.assertIsNotNone(result)
+        self.assertEqual(result.requested_episode, expected_episode)
+        self.assertEqual(result.requested_season, expected_season)
+        self.assertIsNone(result.last_found)
+
+    @patch(target="tor.arrmanager.get_api")
+    @patch(target="tor.arrmanager.search_torrent")
+    @patch(target="tor.arrmanager.add_torrent_by_magnet")
     def test_full_season(
         self, add_torrent_by_magnet: Mock, search_torrent: Mock, get_api: Mock
     ):
@@ -376,6 +426,7 @@ class ArrManagerTests(TestCase):
             encoder=expected_encoder,
             season=expected_season,
             episode=expected_episode,
+            skip_full_season=False,
         )
         torrent = create_torrent(arr.torrent_type)
         add_torrent_by_magnet.return_value = (torrent, None)

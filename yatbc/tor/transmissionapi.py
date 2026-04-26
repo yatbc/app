@@ -8,7 +8,10 @@ from .models import (
     Level,
     TorrentQueue,
     TorrentTorBoxSearchResult,
+    TorrentPeer,
 )
+from timeit import default_timer as timer
+from datetime import timedelta, datetime, timezone as tz
 from .statusmgr import StatusMgr
 from .common import TRANSMISSION_CLIENT, TORBOX_CLIENT
 from .commondao import (
@@ -16,17 +19,21 @@ from .commondao import (
     mark_deleted_torrents,
     add_log,
     add_to_queue_by_magnet,
-    torrent_file_to_log,
+    get_previous_torrents,
     get_active_transmission_downloads,
+    torrent_to_log,
+    map_transmission_entry_to_torrent as map_entry_to_torrent,
+    get_torrents_with_no_history,
+    get_torrent_ides,
 )
 import logging
 from django.forms.models import model_to_dict
 from constance import config
 from django.utils import timezone
 from pathlib import Path
+from urllib.parse import quote
 
 
-# todo: tests
 class TransmissionApi:
     def __init__(
         self,
@@ -103,9 +110,15 @@ class TransmissionApi:
             self.client.remove_torrent(
                 ids=[int(torrent.internal_id)], delete_data=delete_data
             )
+            if delete_data:
+                add_log(
+                    message=f"Removed torrent and data from transmission: {torrent_to_log(torrent)}",
+                    level=Level.objects.get_info(),
+                    source=LogSource.objects.get_transmission_api(),
+                    torrent=torrent,
+                )
             return True
         except Exception as e:
-            self.logger.error(f"Could not remove torrent: {e}")
             add_log(
                 message=f"Could not remove torrent from transmission: {e}",
                 level=Level.objects.get_error(),
@@ -120,7 +133,6 @@ class TransmissionApi:
             result = self.client.add_torrent(torrent=data)
             return result
         except Exception as e:
-            self.logger.error(f"Could not add torrent: {e}")
             add_log(
                 message=f"Could not add torrent with magnet/data: {e}",
                 level=Level.objects.get_error(),
@@ -128,24 +140,89 @@ class TransmissionApi:
             )
             return None
 
-    def request_download_link(self, torrent: Torrent, file: TorrentFile):
-        # self.transmission_dir always starts with /
-        address = f"sftp://{self.sftp_user}:{self.sftp_password}@{self.sftp_host}:{self.sftp_port}{self.transmission_dir}/{file.name}"
-        censored_address = f"sftp://{self.sftp_user}:censored@{self.sftp_host}:{self.sftp_port}{self.transmission_dir}/{file.name}"
+    def request_download_link_as_zip(self, file_path) -> str:
+        from paramiko import SSHClient, AutoAddPolicy
+
+        try:
+            top_level_dir = Path(file_path).parts[0]
+            if (
+                top_level_dir == "."
+                or top_level_dir == ""
+                or top_level_dir == Path(self.transmission_dir).name
+            ):
+                return None  # if there is no top level dir, or it is the same as transmission dir, we can not zip it, because it will include all other files in transmission dir
+            with SSHClient() as client:
+                client.set_missing_host_key_policy(AutoAddPolicy)
+                client.connect(
+                    hostname=self.sftp_host,
+                    port=self.sftp_port,
+                    username=self.sftp_user,
+                    password=self.sftp_password,
+                )
+                zip_name = f"{top_level_dir}.zip"
+                cmd = f'cd "{self.transmission_dir}" && zip -0 -r "{zip_name}" "{top_level_dir}"'
+
+                stdin, stdout, stderr = client.exec_command(cmd)
+                debug_output = stdout.read()
+                self.logger.debug(f"zip of: {cmd}: {debug_output}")
+
+                error = bytes.decode(stderr.read())
+                if error:
+                    self.logger.error(
+                        f"Could not zip dir: {self.transmission_dir +'/' +top_level_dir}, result: {error}"
+                    )
+                    return None
+                return f"sftp://{self.sftp_user}:{self.sftp_password}@{self.sftp_host}:{self.sftp_port}{self.transmission_dir}/{quote(zip_name)}"
+
+        except Exception as e:
+            self.logger.error(f"Could not connect to sftp remote host: {e}")
+            return None
+
+    def request_download_links(
+        self, torrent: Torrent, remove_single_files_for_zip=True
+    ) -> list[(str, TorrentFile)]:
+        files = TorrentFile.objects.filter(torrent=torrent)
+        download_links = []
+        if files.count() > 10:
+            link = self.request_download_link_as_zip(files.first().name)
+            if not link:
+                return None
+            if remove_single_files_for_zip:
+                files.delete()  # remove single files and replace them with zip
+                add_log(
+                    message=f"Torrent has more then 10 files, will request zip file instead {torrent_to_log(torrent)}",
+                    level=Level.objects.get_info(),
+                    source=LogSource.objects.get_torbox_api(),
+                    torrent=torrent,
+                )
+            file = TorrentFile.objects.create(
+                torrent=torrent,
+                name=f"{torrent.name}.zip",
+                short_name=f"{torrent.name}.zip",
+                size=torrent.size,
+                internal_id=None,
+            )
+            return [(link, file)]
+        for file in files:
+            # self.transmission_dir always starts with /
+            address = f"sftp://{self.sftp_user}:{self.sftp_password}@{self.sftp_host}:{self.sftp_port}{self.transmission_dir}/{quote(file.name)}"
+            censored_address = f"sftp://{self.sftp_user}:censored@{self.sftp_host}:{self.sftp_port}{self.transmission_dir}/{quote(file.name)}"
+            download_links.append((address, file))
         add_log(
-            message=f"Generated sftp link: {censored_address} for file: {torrent_file_to_log(file)}",
+            message=f"Generated sftp links: {len(download_links)} for torrent: {torrent_to_log(torrent)}, last one: {censored_address}",
             torrent=torrent,
             source=LogSource.objects.get_transmission_api(),
             level=Level.objects.get_info(),
         )
-        return address
+        return download_links
 
     def get_torrents(self):
         try:
+            start = timer()
             result = self.client.get_torrents()
+            self.logger.debug(f"TransmissionApi.get_torrents took: {timer() - start}")
             return result
         except Exception as e:
-            self.logger.error(f"Could not get torrents: {e}")
             add_log(
                 message=f"Could not get torrents from transmission: {e}",
                 level=Level.objects.get_error(),
@@ -245,16 +322,18 @@ def add_torrent_from_queue(queue: TorrentQueue, api=None):
     return torrent
 
 
-def transmission_delete_torrent(torrent_id):
+def transmission_delete_torrent(torrent_id, delete_data=None):
     if not config.USE_TRANSMISSION:
         return True
-    logger = logging.getLogger("torbox")
     torrent = Torrent.objects.get(pk=torrent_id)
+    if delete_data is None:
+        delete_data = torrent.download_finished == False
+    logger = logging.getLogger("torbox")
+
     api = TransmissionApi()
     if api.remove_torrent(
         torrent=torrent,
-        delete_data=torrent.download_finished
-        == False,  # todo: add a setting for user to choose
+        delete_data=delete_data,
     ):
         torrent.deleted = True
         torrent.save()
@@ -262,8 +341,8 @@ def transmission_delete_torrent(torrent_id):
     return False
 
 
-def delete_torrent(torrent_id):
-    return transmission_delete_torrent(torrent_id)
+def delete_torrent(torrent_id, delete_data=None):
+    return transmission_delete_torrent(torrent_id, delete_data)
 
 
 def validate_transmission_api(
@@ -328,47 +407,64 @@ def transmission_status(api=None, request_files_task=None):
         return
     no_type = TorrentType.objects.get_no_type()
     logger = logging.getLogger("torbox")
+    start = timer()
+
     status_mgr = StatusMgr.get_instance()
 
     api = TransmissionApi() if api is None else api
 
-    torrents = api.get_torrents()
-    if torrents is None:
+    data = api.get_torrents()
+    if data is None:
         return
 
-    not_deleted = []
-    for entry in torrents:
-        # logger.debug(f"{entry.fields}")
-        trackers = entry.trackers
-        tracker = ""
-        if trackers:
-            tracker = trackers[0].announce
-        new_torrent = Torrent(
-            active=entry.eta != None,
-            hash=entry.hash_string,
-            name=entry.name,
-            size=entry.total_size,
-            created_at=entry.added_date,
-            download_finished=entry.seeding or entry.seed_pending,
-            download_present=entry.seeding or entry.seed_pending,
-            tracker=tracker,
-            total_uploaded=entry.uploaded_ever,
-            total_downloaded=entry.downloaded_ever,
-            client=TRANSMISSION_CLIENT,
-            magnet=entry.magnet_link,
-            internal_id=entry.id,
-            torrent_type=no_type,
-            private=entry.is_private,
-        )
-        torrent = update_torrent(new_torrent)
-        status_mgr.transition_in_client_progress_if_needed(torrent)
+    history_array = []
+    peers_array = {}
 
-        logger.debug(model_to_dict(torrent))
-        not_deleted.append(torrent)
-        previous_activity = TorrentHistory.objects.filter(
-            torrent=torrent, updated_at=entry.activity_date
+    torrents = {}
+    for entry in data:
+        logger.debug(
+            f"Processing torrent in transmission {entry.name} {entry.hash_string}"
         )
-        if len(previous_activity) == 0:
+        new_torrent = map_entry_to_torrent(entry, no_type)
+        torrents[new_torrent.hash] = {"new": new_torrent, "old": None, "double": None}
+    torrents = get_previous_torrents(torrent_map=torrents, client=TRANSMISSION_CLIENT)
+    torrent_ids = get_torrent_ides(torrents)
+    torrents_with_no_history = get_torrents_with_no_history(torrent_ids)
+
+    not_deleted = []
+    for entry in data:
+        logger.debug(
+            f"Processing torrent in transmission {entry.name} {entry.hash_string}"
+        )
+
+        new_torrent, old_torrent, double = (
+            torrents[entry.hash_string]["new"],
+            torrents[entry.hash_string]["old"],
+            torrents[entry.hash_string]["double"],
+        )
+
+        torrent = update_torrent(
+            new_torrent=new_torrent, old_torrent=old_torrent, double=double
+        )
+        has_history = torrent.id not in torrents_with_no_history
+        status_mgr.transition_in_client_progress_if_needed(
+            torrent, has_history=has_history
+        )
+
+        # logger.debug(model_to_dict(torrent))
+        not_deleted.append(torrent)
+        previous_activity = False
+        age_change = (
+            datetime.now(tz=tz.utc) - entry.activity_date
+        )  # transmission entry has utc timezone
+        if age_change < timedelta(
+            minutes=20
+        ):  # check only if change is younger then 20 minutes, otherwise it is probably already in the system, and there is no point in spamming queries
+            previous_activity = TorrentHistory.objects.filter(
+                torrent=torrent, updated_at=entry.activity_date
+            ).exists()
+
+        if not previous_activity:
             torrent_history = TorrentHistory(
                 torrent=torrent,
                 download_speed=entry.rate_download,
@@ -382,33 +478,67 @@ def transmission_status(api=None, request_files_task=None):
                 availability=entry.desired_available,
                 state=entry.status.name,
             )
-            torrent_history.save()
-            logger.debug(model_to_dict(torrent_history))
+            history_array.append(torrent_history)
+            if config.COLLECT_PEER_INFO:
+                for peer in entry.peers:
+                    torrent_peer = TorrentPeer(
+                        address=peer.address,
+                        port=peer.port,
+                        client=peer.client_name,
+                        progress=peer.progress,
+                        # downloaded=peer.bytes_to_client, # api does not provide this info
+                        # uploaded=peer.bytes_to_peer,
+                        client_is_choked=peer.client_is_choked,
+                        client_is_interested=peer.client_is_interested,
+                        peer_is_choked=peer.peer_is_choked,
+                        peer_is_interested=peer.peer_is_interested,
+                        flags=peer.flag_str,
+                        is_incoming=peer.is_incoming,
+                    )
+                    if torrent.id in peers_array:
+                        peers_array[torrent.id].append(torrent_peer)
+                    else:
+                        peers_array[torrent.id] = [torrent_peer]
 
         else:
             logger.debug("Torrent wasn't updated")
         torrent_files = entry.get_files()
         files = TorrentFile.objects.filter(torrent=torrent)
         if len(torrent_files) and not files:
-            logger.debug(f"Updating files for: {torrent.name}")
-
+            logger.debug(
+                f"Updating files for: {torrent.name} with files: {len(torrent_files)}"
+            )
+            new_files = []
             for file in torrent_files:
-                logger.debug(file)
                 tor_file = TorrentFile(
                     torrent=torrent,
                     name=file.name,
-                    short_name=None,
+                    short_name=Path(file.name).name,
                     size=file.size,
                     hash=None,
                     mime_type=None,
                     internal_id=file.id,
                 )
-                tor_file.save()
+                new_files.append(tor_file)
+            TorrentFile.objects.bulk_create(new_files)
 
         status_mgr.transition_in_client_done_if_needed(
             torrent,
             files,
             request_torrent_files=request_files_task,
         )
+
+    history_array = TorrentHistory.objects.bulk_create(history_array)
+
+    if config.COLLECT_PEER_INFO:
+        related_peers = []
+        for history in history_array:
+            if history.torrent.id in peers_array:
+                for peer in peers_array[history.torrent.id]:
+                    peer.torrent_history = history
+                    related_peers.append(peer)
+        TorrentPeer.objects.bulk_create(related_peers)
+
     mark_deleted_torrents(not_deleted, clients=[TORBOX_CLIENT])
     config.SKIP_DOWNLOAD_FOR_NEXT_STATUS_CHECK_IN_TRANSMISSION = False
+    logger.debug(f"transmission_status took: {timer() - start}")

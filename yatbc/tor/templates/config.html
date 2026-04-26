@@ -65,6 +65,10 @@
         <button class="nav-link" id="stash-tab" data-bs-toggle="tab" data-bs-target="#stash" type="button" role="tab"
           aria-controls="Stash" aria-selected="false">Stash</button>
       </li>
+      <li class="nav-item" role="presentation">
+        <button class="nav-link" id="jackett-tab" data-bs-toggle="tab" data-bs-target="#jackett" type="button"
+          role="tab" aria-controls="Jackett" aria-selected="false">Jackett</button>
+      </li>
     </ul>
     <div class="tab-content" id="configTabContent">
       <div class="tab-pane fade show active" id="torbox" role="tabpanel" aria-labelledby="torbox-tab">
@@ -243,6 +247,13 @@
       </div>
       <div class="tab-pane fade" id="miscellaneous" role="tabpanel" aria-labelledby="miscellaneous-tab">
         <h2>Miscellaneous settings</h2>
+        <div class="mb-3">
+          <label for="collect_peer_info" class="form-label">
+            Collect peer data for torrents(used only locally for statistics and charts, for example in torrent details
+            view):
+          </label>
+          <input id="collect_peer_info" type="checkbox" x-model="configuration.COLLECT_PEER_INFO" />
+        </div>
         <div class="mb-3">
           <label for="use_dark" class="form-label">
             Use dark theme(After saving, reload the page to apply the theme):
@@ -430,6 +441,17 @@
           </label>
           <input id="organize_movies" type="checkbox" x-model="configuration.ORGANIZE_MOVIES" />
         </div>
+        <div class="mb-3">
+          <label for="organize_audiobooks" class="form-label">
+            Organize new downloads with audiobooks type to match Audiobookshelf folder structure:
+          </label>
+          <input id="organize_audiobooks" type="checkbox" x-model="configuration.ORGANIZE_AUDIOBOOKS" />
+          <label for="organize_audiobooks_connected_to_search" class="form-label">
+            If organize audiobooks is enabled, but organize audiobooks only connected to search results:
+          </label>
+          <input id="organize_audiobooks_connected_to_search" type="checkbox"
+            x-model="configuration.ORGANIZE_AUDIOBOOKS_ONLY_CONNECTED_TO_SEARCH" />
+        </div>
       </div>
       <div class="tab-pane fade" id="stash" role="tabpanel" aria-labelledby="stash-tab">
         <h2>Stash settings</h2>
@@ -464,7 +486,22 @@
           <button class="btn btn-secondary ms-auto" @click="validateStash()">Validate Stash</button>
         </div>
       </div>
-
+      <div class="tab-pane fade" id="jackett" role="tabpanel" aria-labelledby="jackett-tab">
+        <h2>Jackett settings</h2>
+        <p>Configure Jackett if you want to use it in Advanced Search panel</p>
+        <template x-for="type in torrent_types" :key="index">
+          <div class="card mb-3">
+            <div class="card-header">
+              <span x-text="type.name"></span>
+            </div>
+            <div class="card-body">
+              <label class="form-check-label" :for="`url-${type.id}`">Indexer RSS feed:</label>
+              <input class="form-control" type="text" :id="`url-${type.id}`" x-model="jackett_query_urls[type.id].url"
+                placeholder="Indexer RSS feed URL" />
+            </div>
+          </div>
+        </template>
+      </div>
     </div>
 
 

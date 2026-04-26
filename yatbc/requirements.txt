@@ -1,11 +1,13 @@
 django
 django-bootstrap5
 torbox_api
-django-tasks
-transmission-rpc
+django-tasks==0.11.0
+transmission-rpc>=8.0.0a4
 requests
 asttokens
 django-constance
 bleach
 dotenv
 paramiko
+lxml
+patool

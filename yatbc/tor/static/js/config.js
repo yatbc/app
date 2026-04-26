@@ -7,6 +7,7 @@ function get_config() {
     transmission_sftp_password_value: "",
     torbox_api_key_value: "",
     torrent_types: {},
+    jackett_query_urls: {},
     torbox_api_valid: null,
     torbox_host_valid: null,
     aria2_dir_valid: null,
@@ -45,6 +46,7 @@ function get_config() {
           }
           this.configuration = data.configuration;
           this.torrent_types = data.torrent_types;
+          this.jackett_query_urls = data.jackett_query_urls;
           this.folders_valid = [];
           if (globalFirstRun && !this.configuration.TORBOX_API_KEY_SET) {
             this.torbox_api_valid = false;
@@ -52,6 +54,7 @@ function get_config() {
 
           console.log(this.configuration);
           console.log(this.torrent_types);
+          console.log(this.jackett_query_urls);
         })
       );
 
@@ -65,6 +68,9 @@ function get_config() {
         ...this.configuration,
         TORRENT_TYPES: {
           ...this.torrent_types,
+        },
+        JACKETT_QUERY_URLS: {
+          ...this.jackett_query_urls,
         },
       };
       if (this.torbox_api_key_value) {

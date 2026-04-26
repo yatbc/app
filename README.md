@@ -143,3 +143,11 @@ YATBC has internal queue, if you want to add large number of files, but have no 
 
 11. Recently I updated my TorBox subscription, but my download slot limit seems to be the same in YATBC?
    - YATBC checks available download slots once per day if there are files in the queue. Wait 24 hours, and it should be updated.
+
+12. I see my ssh password in Aria2c logs?
+   - YATBC uses sftp links to download files from Transmission. Sftp links contain password to download the files. If this is an issue, try changing Aria2c log level in `/persistent_data/aria2/aria2.conf`
+
+13. Sometimes I see status `Local download: Error` and in the Logs I see `Bad Request`?
+   - This is tricky. It happens when there is a lot of files in Aria2c queue. To solve this, try to limit Transmission active downloads to <10 at the same time(Set it in your Transmission client, and YATBC will read it from there).
+14. Sometimes on restart, I see `Could not download file xxxxxx HTTPConnectionPool(host='yatbc-aria', port=6800) Max retries...`, and when I press Validate in Aria config page, it fails?
+   - Check if docker exposes the right ports. `docker container ls` and confirm that `yatbc/aria` exposes port 6800(should be visible in ports column). If not, try to stop end remove all yatbc-related containers. `docker compose down` inside folder containing yatbc docker-compose file.
