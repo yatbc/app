@@ -75,9 +75,34 @@ class ErrorLog(models.Model):
     source = models.ForeignKey(LogSource, on_delete=models.CASCADE, null=True)
 
 
+class TorrentStatusManager(models.Manager):
+    def get_client_init(self):
+        return get_value(self, "Client: Init")
+
+    def get_client_added(self):
+        return get_value(self, "Client: Added")
+
+    def get_client_in_progress(self):
+        return get_value(self, "Client: In Progress")
+
+    def get_client_active_statuses(self):
+        return [
+            self.get_client_in_progress(),
+            self.get_client_added(),
+            self.get_client_init(),
+        ]
+
+    def get_client_done(self):
+        return get_value(self, "Client: Done")
+
+    def get_local_download_error(self):
+        return get_value(self, "Local download: Error")
+
+
 class TorrentStatus(models.Model):
     name = models.CharField(max_length=100)
     level = models.ForeignKey(Level, on_delete=models.CASCADE)
+    objects = TorrentStatusManager()
 
 
 class TorrentTypeManager(models.Manager):
@@ -126,7 +151,7 @@ class ArrBase(models.Model):
 
 class Torrent(models.Model):
     active = models.BooleanField(default=False)
-    hash = models.CharField(max_length=255)
+    hash = models.CharField(max_length=255, db_index=True)
     name = models.TextField(default="Placeholder Torrent")
     size = models.IntegerField(default=0)
     created_at = models.DateTimeField()
@@ -183,6 +208,22 @@ class TorrentHistory(models.Model):
     state = models.TextField(default="Unknown")
 
 
+class TorrentPeer(models.Model):
+    torrent_history = models.ForeignKey(TorrentHistory, on_delete=models.CASCADE)
+    address = models.CharField(max_length=100)
+    port = models.IntegerField()
+    client = models.CharField(max_length=255, null=True, blank=True)
+    progress = models.FloatField(default=0.0)
+    downloaded = models.BigIntegerField(default=0)
+    uploaded = models.BigIntegerField(default=0)
+    client_is_choked = models.BooleanField(default=False)
+    client_is_interested = models.BooleanField(default=False)
+    peer_is_choked = models.BooleanField(default=False)
+    peer_is_interested = models.BooleanField(default=False)
+    flags = models.CharField(max_length=255, null=True, blank=True)
+    is_incoming = models.BooleanField(default=False)
+
+
 class AriaDownloadStatus(models.Model):
     internal_id = models.CharField(max_length=255, null=True, blank=True, default=None)
     path = models.CharField(max_length=255)
@@ -210,6 +251,80 @@ class TorrentFile(models.Model):
     mime_type = models.CharField(max_length=100, null=True, blank=True)
     internal_id = models.CharField(max_length=100, null=True, blank=True, default=None)
     action_on_finish_done = models.BooleanField(default=False)
+
+
+class JackettQueryUrl(models.Model):
+    name = models.CharField(max_length=100)
+    url = models.TextField()
+    torrent_type = models.ForeignKey(TorrentType, on_delete=models.CASCADE)
+
+
+class JackettSearch(models.Model):
+    query = models.TextField()
+    date = models.DateTimeField(auto_now_add=True)
+    torrent_type = models.ForeignKey(TorrentType, on_delete=models.CASCADE)
+
+
+class JackettSearchResultBase(models.Model):
+    query = models.ForeignKey(JackettSearch, on_delete=models.CASCADE)
+    full_title = models.CharField(max_length=255)
+    title = models.CharField(max_length=255)
+    torrent_link = models.TextField()
+    size = models.IntegerField()
+    torrent = models.ForeignKey(
+        Torrent, null=True, blank=True, default=None, on_delete=models.SET_NULL
+    )
+    queue = models.ForeignKey(  # needed to know if we can clear the search
+        TorrentQueue, null=True, blank=True, default=None, on_delete=models.SET_NULL
+    )
+    grabs = models.IntegerField()
+    seeders = models.IntegerField()
+    peers = models.IntegerField()
+    indexer = models.CharField(max_length=255)
+    private = models.BooleanField(default=True)
+    published_date = models.DateTimeField(null=True, blank=True, default=None)
+    comments = models.TextField(null=True, blank=True, default=None)
+    guid = models.CharField(
+        max_length=255, null=True, blank=True, default=None, db_index=True
+    )
+    hash = models.CharField(
+        max_length=255, null=True, blank=True, default=None, db_index=True
+    )
+    torbox_cached = models.BooleanField(null=True, blank=True, default=None)
+    magnet_link = models.TextField(null=True, blank=True, default=None)
+    torbox_cached_updated_at = models.DateTimeField(null=True, blank=True, default=None)
+    tags = models.TextField(null=True, blank=True, default=None)
+
+
+class JackettSearchResultHomeVideo(JackettSearchResultBase):
+    performer = models.CharField(max_length=255, null=True, blank=True, default=None)
+
+
+class Person(models.Model):
+    name = models.CharField(max_length=255, unique=True)
+
+
+class JackettSearchResultAudiobook(JackettSearchResultBase):
+    author = models.ForeignKey(
+        Person,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        default=None,
+        related_name="audiobook_author",
+    )
+    narrator = models.ForeignKey(
+        Person,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        default=None,
+        related_name="audiobook_narrator",
+    )
+    series = models.CharField(max_length=255, null=True, blank=True, default=None)
+    part = models.CharField(max_length=10, null=True, blank=True, default=None)
+    description = models.TextField(null=True, blank=True, default=None)
+    cover_url = models.TextField(null=True, blank=True, default=None)
 
 
 class TorrentTorBoxSearchManager(models.Manager):
@@ -262,7 +377,7 @@ class TorrentTorBoxSearchResult(models.Model):
     torrent = models.ForeignKey(
         Torrent, null=True, blank=True, default=None, on_delete=models.SET_NULL
     )
-    queue = models.ForeignKey(  # needed to know if I can clear the search
+    queue = models.ForeignKey(  # needed to know if we can clear the search
         TorrentQueue, null=True, blank=True, default=None, on_delete=models.SET_NULL
     )
 
@@ -276,6 +391,7 @@ class ArrMovieSeries(ArrBase):
     encoder = models.CharField(max_length=100, null=True, blank=True, default=None)
     requested_season = models.IntegerField()
     requested_episode = models.IntegerField()
+    skip_full_season = models.BooleanField(default=False)
 
 
 class ArrErrorLog(models.Model):

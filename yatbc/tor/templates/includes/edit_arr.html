@@ -24,6 +24,11 @@
                             placeholder="S1/E1"></input>
                     </div>
                     <div class="mb-3">
+                        <label for="skip_full_season" class="form-label">Skip full seasons:</label>
+                        <input class="form-check-input" type="checkbox" id="skip_full_season"
+                            x-model="arrObject.skip_full_season"></input>
+                    </div>
+                    <div class="mb-3">
                         <label for="quality" class="form-label">Quality:</label>
                         <input class="form-control" id="quality" x-model="arrObject.quality" maxlength="50"
                             placeholder="Preferred quality(Optional, will pick any of, separate by coma, priority from left)"></input>

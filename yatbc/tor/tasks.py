@@ -7,6 +7,8 @@ from .torboxapi import (
     add_torrent_by_magnet,
     TorBoxApi,
 )
+from random import randint
+from .searchapi import get_audiobooks, update_cached_status, fill_audiobook_details
 from .transmissionapi import (
     transmission_status,
     add_torrent_by_magnet as transmission_add_torrent_by_magnet,
@@ -27,11 +29,15 @@ from django.db.models import Case, When, Value, IntegerField
 from constance import config
 from .statusmgr import StatusMgr
 from .models import LogSource
+from torbox.settings import DISABLE_CLIENT_STATUS_UPDATES
 
 
 @task(priority=-10)
 def transmission_status_task():
     logger = logging.getLogger("torbox")
+    if DISABLE_CLIENT_STATUS_UPDATES:
+        logger.info("Client status updates are disabled in settings")
+        return
     logger.info("Starting transmission api")
     transmission_status(request_files_task=transmission_request_torrent_files)
     logger.info("Transmission api done")
@@ -40,6 +46,9 @@ def transmission_status_task():
 @task()
 def check_local_download_status_task():
     logger = logging.getLogger("torbox")
+    if DISABLE_CLIENT_STATUS_UPDATES:
+        logger.info("Client status updates are disabled in settings")
+        return
     logger.info("Starting local download status check")
     check_local_download_status()
     logger.info("Local download status check done")
@@ -104,7 +113,8 @@ def import_form_queue_folders_task():
     logger.info("Import from queue folders done")
 
 
-@task()
+# sometimes queue is full, and slots are empty, but long tasks are blocking paraler work, so set higher priority
+@task(priority=1)
 def process_queue_task():
     from .queuemgr import add_from_queue
 
@@ -175,13 +185,13 @@ def double_torrent_task(torrent_id):
     logger.info("Request done")
 
 
-@task()
-def change_torrent_task(action, torrent_id):
+@task(priority=2)
+def change_torrent_task(action, torrent_id, delete_files=False):
     logger = logging.getLogger("torbox")
     logger.info(f"Requesting change: {action}, {torrent_id}")
     torrent = Torrent.objects.get(pk=torrent_id)
     if action == "delete" and torrent.client == TRANSMISSION_CLIENT:
-        transmission_delete_torrent(torrent_id=torrent_id)
+        transmission_delete_torrent(torrent_id=torrent_id, delete_data=delete_files)
     elif torrent.client == TORBOX_CLIENT:
         change_torrent(torrent_id=torrent_id, action=action)
     else:
@@ -215,10 +225,71 @@ def process_arr_task(arr_id: int):
     if status:
         logger.info(f"Arr manager found next episode, queueing again")
         start_time = timezone.now() + timedelta(seconds=30)
-        next_schedule = process_arr_task.using(
-            run_after=start_time
-        )  # don't spam it, wait for 30s
+        next_schedule = process_arr_task.using(run_after=start_time)
         next_schedule.enqueue(arr_id)
+
+
+@task()
+def update_audiobook_cached_status():
+    logger = logging.getLogger("torbox")
+    logger.info("Starting update audiobook cached status")
+    api = TorBoxApi()
+    updated = update_cached_status(api=api)
+    logger.info("Update audiobook cached status done")
+    if updated:
+        logger.info(f"Updated cached status for audiobooks, scheduling again")
+        start_time = timezone.now() + timedelta(seconds=30)
+        next_schedule = update_audiobook_cached_status.using(run_after=start_time)
+        next_schedule.enqueue()
+    return updated
+
+
+@task()
+def fill_audiobook_details_task(query_id: int):
+    logger = logging.getLogger("torbox")
+    logger.info(f"Starting fill audiobook details for query id: {query_id}")
+    from .models import JackettSearch
+
+    query = JackettSearch.objects.get(pk=query_id)
+    filled = fill_audiobook_details(
+        query=query,
+        audiobook_bay_api=None,
+    )
+    logger.info(f"Fill audiobook details done, filled {filled} results")
+    if filled > 0:
+        logger.info(f"Scheduling again fill audiobook details")
+        start_time = timezone.now() + timedelta(seconds=30 + randint(0, 30))
+        next_schedule = fill_audiobook_details_task.using(run_after=start_time)
+        next_schedule.enqueue(query_id)
+    else:
+        logger.info("All details filed, checking cache")
+        update_audiobook_cached_status.enqueue()
+
+
+@task()
+def get_advanced_search_audiobooks(query: str):
+
+    logger = logging.getLogger("torbox")
+    logger.info(f"Starting advanced search for audiobooks: {query}")
+    results = get_audiobooks(query=query)
+    logger.info(f"Advanced search for audiobooks done, results id: {results}")
+    fill_audiobook_details_task.enqueue(results)
+    return results
+
+
+@task()
+def schedule_update_audiobook_cached_status():
+    logger = logging.getLogger("torbox")
+    task_type = "tor.tasks.update_audiobook_cached_status"
+    result = get_task_queued_or_running(task_type)
+    if result:
+        logger.info(f"Already queued: {task_type}")
+        return
+    logger.info("Scheduling update audiobook cached status task")
+    start_time = timezone.now() + timedelta(hours=1)
+    next_schedule = update_audiobook_cached_status.using(run_after=start_time)
+    next_schedule.enqueue()
+    logger.info("Scheduling done")
 
 
 @task()
@@ -233,6 +304,15 @@ def schedule_arrs_tasks():
 
 
 def check_status():
+    logger = logging.getLogger("torbox")
+    if DISABLE_CLIENT_STATUS_UPDATES:
+        logger.info("Client status updates are disabled in settings")
+
+        class Fake:
+            def __init__(self):
+                self.id = "Fake.Status.Id"
+
+        return Fake()
     result = queue_check_local_download_status()
     result = queue_torbox_status()
     if config.USE_TRANSMISSION:
@@ -353,6 +433,7 @@ def queue_process_queue():
 
 @task()
 def schedule_tasks():
+
     start_time = timezone.now()
     start_time += timedelta(minutes=10)
     logger = logging.getLogger("torbox")

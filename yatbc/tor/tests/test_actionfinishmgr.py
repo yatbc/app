@@ -6,6 +6,7 @@ from ..models import (
     AriaDownloadStatus,
     TorrentTorBoxSearchResult,
     TorrentTorBoxSearch,
+    JackettSearch,
 )
 from ..actiononfinishmgr import (
     ActionMgr,
@@ -32,6 +33,7 @@ from .utils import (
     create_work_dir,
     create_file,
     create_search,
+    create_audiobook_search_result,
 )
 from django.utils import timezone
 from constance import config
@@ -43,6 +45,7 @@ class ActionMgrTests(TestCase):
         logging.config.dictConfig(console_logging_config)
         config.ORGANIZE_MOVIE_SERIES = True
         config.ORGANIZE_MOVIES = True
+        config.ORGANIZE_AUDIOBOOKS = True
         self.status_mgr = StatusMgr.get_instance()
         self.no_type = TorrentType.objects.get_no_type()
         self.other = TorrentType.objects.get_other()
@@ -50,6 +53,7 @@ class ActionMgrTests(TestCase):
         self.other.save()
         self.audio = TorrentType.objects.get_audiobooks()
         self.audio.action_on_finish = TorrentType.ACTION_MOVE
+        self.audio.target_dir = "target"
         self.audio.save()
         self.movie_series = TorrentType.objects.get_movie_series()
         self.movie_series.action_on_finish = TorrentType.ACTION_MOVE
@@ -421,3 +425,89 @@ class ActionMgrTests(TestCase):
         self.assertTrue(expected_file.exists())
         self.assertFalse(temp_file.exists())
         shutil.rmtree(target)
+
+    # def test_shorten_target_path(self):
+    #     file, temp_file, work_dir = self._prepare_test(self.other, file_name="test.mp4")
+
+    #     mgr = ActionMgr()
+    #     target = create_work_dir(self.movies.target_dir)
+    #     self.assertTrue(temp_file.exists())
+    #     self.assertFalse(file.action_on_finish_done)
+
+    #     mgr.run(file.torrent)
+
+    #     expected_file = Path(
+    #         target
+    #         / "Test Movie With A Very Long Title That Exceeds The Limit [imdbid-tt001]"
+    #         / "Test Movie With A Very Long Title That Exceeds The Limit 1080p.mp4"
+    #     )
+    #     self.assertTrue(expected_file.exists())
+    #     self.assertFalse(temp_file.exists())
+    #     shutil.rmtree(target)
+
+    def test_audiobook_non_existing_dir(self):
+        file, temp_file, work_dir = self._prepare_test(self.audio, file_name="test.mp3")
+
+        search = create_audiobook_search_result(
+            query=JackettSearch.objects.create(
+                query="test query",
+                date=timezone.now(),
+                torrent_type=TorrentType.objects.get_audiobooks(),
+            ),
+            title="Test Audiobook",
+            description="By: Test Author\n",
+            author="Test Author",
+            narrator="Test Narrator",
+            torrent=file.torrent,
+        )
+        target = create_work_dir(self.audio.target_dir)
+        mgr = ActionMgr()
+        self.assertTrue(temp_file.exists())
+        self.assertFalse(file.action_on_finish_done)
+
+        mgr.run(file.torrent)
+
+        expected_file = Path(
+            target / "Test Author" / "Test Audiobook {Test Narrator}" / "test.mp3"
+        )
+        self.assertTrue(expected_file.exists())
+        self.assertFalse(temp_file.exists())
+        shutil.rmtree(target)
+
+    def test_unzip(self):
+        file, temp_file, work_dir = self._prepare_test(
+            self.movie_series, file_name="test.zip"
+        )
+        # create a zip file with some content
+        zip_path = Path(temp_file)
+        extract_dir = zip_path.parent / "extract_here"
+        extract_dir.mkdir(parents=True, exist_ok=True)
+        (extract_dir / "file S1E1.mkv").write_text("This is file 1")
+        (extract_dir / "file S1E1.txt").write_text("This is file 2")
+        shutil.make_archive(zip_path.with_suffix(""), "zip", extract_dir)
+        shutil.rmtree(extract_dir)
+
+        mgr = ActionMgr()
+        target = create_work_dir(self.movie_series.target_dir)
+        self.assertTrue(temp_file.exists())
+        self.assertFalse(file.action_on_finish_done)
+
+        mgr.run(file.torrent)
+
+        expected_extracted_file1 = (
+            Path(self.movie_series.target_dir)
+            / "file"
+            / "season 01"
+            / "File S01E01.mkv"
+        )
+
+        expected_extracted_file2 = (  # non movie series file are not renamed
+            Path(self.movie_series.target_dir) / "file" / "season 01" / "file S1E1.txt"
+        )
+        print(expected_extracted_file2)
+
+        self.assertTrue(expected_extracted_file1.exists())
+        self.assertTrue(expected_extracted_file2.exists())
+        self.assertFalse(temp_file.exists())
+        shutil.rmtree(target)
+        shutil.rmtree(work_dir, ignore_errors=True)

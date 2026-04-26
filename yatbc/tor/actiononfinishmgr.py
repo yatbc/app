@@ -5,12 +5,16 @@ from .models import (
     TorrentTorBoxSearchResult,
     Level,
     LogSource,
+    AriaDownloadStatus,
+    JackettSearchResultAudiobook,
 )
+from .arrutils import extract_metadata as extract_audiobook_metadata
 from .statusmgr import StatusMgr
 import logging
 import abc
 import shutil
 import re
+from patoolib import extract_archive
 from .commondao import (
     torrent_file_to_log,
     format_log_value,
@@ -353,7 +357,12 @@ def build_target_dir(target_dir: Path, season=None):
 
 
 def find_existing_dir(
-    target_dir: Path, title: str, file_name: str, season=None, episode=None, imdbid=None
+    target_dir: Path,
+    title: str,
+    file_name: str = None,
+    season=None,
+    episode=None,
+    imdbid=None,
 ):
     title = re.compile(r"\b" + title.lower() + r"\b")
     IMDBID = "imdbid-"
@@ -400,10 +409,11 @@ def normalize_movies_file_name(file_name, title=None, resolution=None):
 def is_known_movie_type(file: TorrentFile):
     logger = logging.getLogger("torbox")
     logger.debug(f"Checking file: {file.name} with type: {file.mime_type}")
-    if "video" in file.mime_type.lower():
-        return True
-    if "text/" in file.mime_type.lower():
-        return False
+    if file.mime_type:
+        if "video" in file.mime_type.lower():
+            return True
+        if "text/" in file.mime_type.lower():
+            return False
     extension = Path(file.name).suffix.lower()
     wrong_types = [".txt", ".nfo"]
     if extension in wrong_types:
@@ -414,11 +424,166 @@ def is_known_movie_type(file: TorrentFile):
     return False
 
 
+def is_known_audiobook_type(file: TorrentFile):
+    logger = logging.getLogger("torbox")
+    logger.debug(f"Checking file: {file.name} with type: {file.mime_type}")
+    if file.mime_type:
+        if "audio" in file.mime_type.lower():
+            return True
+        if "text/" in file.mime_type.lower():
+            return False
+    extension = Path(file.name).suffix.lower()
+    wrong_types = [".txt", ".nfo"]
+    if extension in wrong_types:
+        return False
+    ok_types = [".mp3", ".m4a", ".flac", ".aac", ".ogg"]
+    if extension in ok_types:
+        return True
+    return False
+
+
 def find_movie(files: list[TorrentFile]):
     for file in files:
         if is_known_movie_type(file):
             return file
     return None
+
+
+def find_audiobook(files: list[TorrentFile]):
+    for file in files:
+        if is_known_audiobook_type(file):
+            return file
+    return None
+
+
+class AudiobookEnterHandler(ActionHandler):
+    def __init__(self):
+        super().__init__()
+        self.audiobooks_type = TorrentType.objects.get_audiobooks()
+
+    def _prepare_folders(self, file: TorrentFile, action: Action):
+        import re
+
+        file_name = file.name
+        jackett_search = JackettSearchResultAudiobook.objects.filter(
+            Q(hash=action.torrent.hash) | Q(torrent=action.torrent)
+        ).first()
+        if not jackett_search and config.ORGANIZE_AUDIOBOOKS_ONLY_CONNECTED_TO_SEARCH:
+            self.logger.warning(
+                f"Torrent: {action.torrent} is not connected to search, skipping organization because ORGANIZE_AUDIOBOOKS_ONLY_CONNECTED_TO_SEARCH is True"
+            )
+            return None
+        author = None
+        title = file_name.strip()
+        description = None
+        narrator = None
+        if jackett_search:
+            author = jackett_search.author.name if jackett_search.author else None
+            title = jackett_search.title
+            description = jackett_search.description
+            narrator = jackett_search.narrator.name if jackett_search.narrator else None
+        title, author, series, part, extension, sample_rate, narrator = (
+            extract_audiobook_metadata(
+                description=description,
+                full_title=title,
+                author=author,
+                narrator=narrator,
+            )
+        )
+        # uses audiobook shelf format: Author/Series/Part Title {narrator} - Volume part
+        target_dir = Path(action.torrent_type.target_dir)
+        author_dir = find_existing_dir(target_dir, author)
+        if not author_dir and author:
+            author_dir = Path(action.torrent_type.target_dir) / author
+            author_dir.mkdir(parents=True, exist_ok=True)
+            target_dir = author_dir
+        if series:
+            series_dir = find_existing_dir(author_dir, series)
+            if not series_dir:
+                series_dir = author_dir / series
+                series_dir.mkdir(parents=True, exist_ok=True)
+            target_dir = series_dir
+        title_dir = find_existing_dir(target_dir, title)
+
+        if title_dir:
+            add_log(
+                f"Folder with audiobook from torrent: {torrent_to_log(action.torrent)} already existed, skipping organization. Existing dir: {format_log_value(title_dir)}",
+                level=Level.objects.get_info(),
+                source=LogSource.objects.get_action_mgr(),
+                torrent=action.torrent,
+            )
+            action.target_dir = title_dir
+            return file_name
+        if title:
+            source, old_target = action.build_paths(file)
+            full_name = title
+            if narrator:
+                full_name += " {" + narrator + "}"
+            if part:
+                full_name += f" - Volume {part}"
+            target_dir = target_dir / full_name
+            target_path = target_dir / file_name
+            add_log(
+                f"Updating target path for audiobook. From: {format_log_value(old_target)}<br/> to new dir: {format_log_value(target_path)}",
+                level=Level.objects.get_info(),
+                source=LogSource.objects.get_action_mgr(),
+                torrent=action.torrent,
+            )
+            action.target_dir = target_dir
+            return file_name
+        add_log(
+            message=f"Could not find/build target folder for audiobook: title: {format_log_value(title)}, file_name: {format_log_value(file_name)}",
+            level=Level.objects.get_warning(),
+            source=LogSource.objects.get_action_mgr(),
+            torrent=action.file.torrent,
+        )
+        return None
+
+    def _organize(self, action: Action):
+        if not config.ORGANIZE_AUDIOBOOKS:
+            return False
+        self.logger.info("Handling action for audiobooks")
+        audiobook = find_audiobook(action.files)
+        if not audiobook:
+            add_log(
+                message=f"Could not find audiobook file in torrent: {torrent_to_log(action.torrent)}, skipping organization",
+                level=Level.objects.get_warning(),
+                source=LogSource.objects.get_action_mgr(),
+                torrent=action.torrent,
+            )
+            return True
+
+        action.paths = []  # reset paths, because target_dir could have changed
+
+        file_name = self._prepare_folders(
+            audiobook, action
+        )  # generate target_dir from audiobook file
+        for (
+            file
+        ) in action.files:  # fill paths again, because target_dir could have changed
+            source_path, target_path = action.build_paths(file)
+            if file == audiobook:
+                action.paths.append((source_path, action.target_dir / file_name, file))
+                continue
+            if is_known_audiobook_type(file):
+                new_name = self._prepare_folders(file, action)
+                if new_name:
+                    action.paths.append(
+                        (source_path, action.target_dir / new_name, file)
+                    )
+                    continue
+            action.paths.append((source_path, target_path, file))
+
+        return True
+
+    def handle(self, action: Action):
+        if not self._handle_type(self.audiobooks_type, self._organize, action):
+            self.logger.info(
+                "Skipping movies organization action, it is disabled in settings"
+            )
+
+        if self.handler:
+            self.handler.handle(action)
 
 
 class MoviesEnterHandler(ActionHandler):
@@ -514,10 +679,11 @@ class MoviesEnterHandler(ActionHandler):
                     continue
                 if is_known_movie_type(file):
                     new_name = self._prepare_folders(file, action)
-                    action.paths.append(
-                        (source_path, action.target_dir / new_name, file)
-                    )
-                    continue
+                    if new_name:
+                        action.paths.append(
+                            (source_path, action.target_dir / new_name, file)
+                        )
+                        continue
                 action.paths.append((source_path, target_path, file))
 
             return True
@@ -592,7 +758,7 @@ class MoveSeriesEnterHandler(ActionHandler):
             return normalized_file_name
         add_log(
             message=f"Could not find/build target folder for movie series: title: {format_log_value(title)}, file_name: {format_log_value(file_name)}, season: {format_log_value(season)}, episode: {format_log_value(episode)}, imdbid: {format_log_value(imdbid)}",
-            level=Level.objects.warning(),
+            level=Level.objects.get_warning(),
             source=LogSource.objects.get_action_mgr(),
             torrent=action.torrent,
         )
@@ -610,10 +776,22 @@ class MoveSeriesEnterHandler(ActionHandler):
                     torrent=action.torrent,
                 )
                 return True
+            old_paths = action.paths.copy()
             action.paths = []  # reset paths, because target_dir could have changed
             file_name = self._prepare_folders(
                 movie, action
             )  # generate target_dir from movie file
+
+            if file_name is None:
+                action.paths = old_paths  # restore old paths
+                add_log(
+                    message=f"Could not prepare target folder for movie series organization for torrent: {torrent_to_log(action.torrent)}, skipping organization",
+                    level=Level.objects.get_warning(),
+                    source=LogSource.objects.get_action_mgr(),
+                    torrent=action.torrent,
+                )
+                return True
+
             for (
                 file
             ) in (
@@ -627,10 +805,11 @@ class MoveSeriesEnterHandler(ActionHandler):
                     continue
                 if is_known_movie_type(file):
                     new_name = self._prepare_folders(file, action)
-                    action.paths.append(
-                        (source_path, action.target_dir / new_name, file)
-                    )
-                    continue
+                    if new_name:
+                        action.paths.append(
+                            (source_path, action.target_dir / new_name, file)
+                        )
+                        continue
                 action.paths.append((source_path, target_path, file))
 
             return True
@@ -646,6 +825,118 @@ class MoveSeriesEnterHandler(ActionHandler):
             self.handler.handle(action)
 
 
+# # this only works on long initial names, not on long names generated by organization handlers
+# class ShortenFolderNameEnterHandler(ActionHandler):
+#     def __init__(self):
+#         super().__init__()
+#         self.logger = logging.getLogger("torbox")
+
+#     def _shorten_and_update_paths(self, action: Action):
+#         previous_name = action.target_dir.name
+#         action.target_dir = action.target_dir.parent / action.target_dir.name[:50]
+#         if action.target_dir.exists():
+#             self.logger.info(
+#                 f"Target dir with name {action.target_dir} already exists, adding hash to avoid conflicts"
+#             )
+#             action.target_dir = action.target_dir.parent / (
+#                 action.target_dir + "_" + action.torrent.hash[:8]
+#             )
+#         self.logger.info(
+#             f"Renaming target dir from {previous_name} to {action.target_dir.name} to avoid issues with long folder names"
+#         )
+
+#     def handle(self, action: Action):
+#         if len(action.target_dir.name) > 50:
+#             self.logger.info(
+#                 f"Found target dir with name {action.target_dir} longer then {len(action.target_dir.name)} characters, shortening folder name to 50 characters"
+#             )
+#             self._shorten_and_update_paths(action)
+#         if self.handler:
+#             self.handler.handle(action)
+
+
+class UnzipEnterHandler(ActionHandler):
+    def __init__(self):
+        super().__init__()
+        self.logger = logging.getLogger("torbox")
+
+    def _get_zip_files_and_clean_paths(self, action: Action):
+        result = []
+        cleaned_paths = []
+        self.logger.info(f"Paths in action before unzip check: {action.paths}")
+        for source_path, target_path, file in action.paths:
+            source_path = Path(source_path)
+            if source_path.suffix.lower() in [".zip", ".rar", ".7z"]:
+                result.append(source_path)
+            else:
+                cleaned_paths.append((source_path, target_path, file))
+        action.paths = cleaned_paths
+        self.logger.info(f"Paths in action after unzip check: {action.paths}")
+        return result
+
+    def _get_dir_files(self, dir_path: Path) -> list[Path]:
+        result = []
+        for entry in dir_path.iterdir():
+            if entry.is_file():
+                result.append(entry)
+            else:
+                result.extend(self._get_dir_files(entry))
+        return result
+
+    def _unzip_files_and_update_paths(self, files: list[Path], action: Action):
+        for source_path in files:
+            target_path = source_path.parent / source_path.stem
+            extract_archive(str(source_path), outdir=str(target_path))
+            self.logger.info(
+                f"Unzipped file: {format_log_value(source_path)} to dir: {format_log_value(target_path)}"
+            )
+            source_path.unlink(missing_ok=True)
+            self.logger.info(
+                f"Removed archive file after unzip: {format_log_value(source_path)}"
+            )
+
+            # Update action paths to reflect unzipped content
+            files = self._get_dir_files(target_path)
+            self.logger.info(
+                f"Found {len(files)} files in unzipped dir: {format_log_value(target_path)}"
+            )
+            new_files = []
+            new_aria = []
+            for path in files:
+                self.logger.info(
+                    f"Adding unzipped file to action paths: {format_log_value(path)}"
+                )
+                aria = AriaDownloadStatus(path=str(path), done=True)
+                new_aria.append(aria)
+                new_files.append(
+                    TorrentFile(
+                        aria=aria,
+                        torrent=action.torrent,
+                        name=str(path),
+                        short_name=str(path),
+                        size=path.stat().st_size,
+                    )
+                )
+            new_aria = AriaDownloadStatus.objects.bulk_create(new_aria)
+            new_files = TorrentFile.objects.bulk_create(new_files)
+            self.logger.info(
+                f"Created {len(new_files)} TorrentFile entries for unzipped files"
+            )
+            action.files = new_files
+            for file in new_files:
+                action.paths.append(
+                    (Path(file.name), action.target_dir / Path(file.name).name, file)
+                )
+
+    def handle(self, action: Action):
+        zipped_files = self._get_zip_files_and_clean_paths(action)
+        if zipped_files:
+            self.logger.info(f"Found {len(zipped_files)} archive files to unzip")
+            self._unzip_files_and_update_paths(zipped_files, action)
+        if self.handler:
+            self.handler.handle(action)
+
+
 class ActionFactory:
     def __init__(self):
         self.logger = logging.getLogger("torbox")
@@ -655,8 +946,12 @@ class ActionFactory:
     ) -> Action:
         enter_handler = CopyEnterHandler()
         enter_handler = MoviesEnterHandler().set_next(
-            MoveSeriesEnterHandler().set_next(enter_handler)
+            MoveSeriesEnterHandler().set_next(
+                AudiobookEnterHandler().set_next(enter_handler)
+            )
         )
+        enter_handler = UnzipEnterHandler().set_next(enter_handler)
+        # enter_handler = ShortenFolderNameEnterHandler().set_next(enter_handler)
         exit_handler = StashRescanExitHandler().set_next(ExitHandler())
         torrent_type = torrent.torrent_type
         if torrent_type.action_on_finish == TorrentType.ACTION_DO_NOTHING:

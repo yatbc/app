@@ -5,7 +5,8 @@ RUN apt-get update && apt-get upgrade -y && apt-get install -y \
     python3-venv \
     python3-pip \
     dnsutils \
-    tzdata 
+    tzdata \
+    sqlite3
 COPY docker/yatbc-gui/my-httpd.conf /usr/local/apache2/conf/httpd.conf
 COPY ./yatbc/requirements.txt /var/www/yatbc/requirements.txt
 COPY docker/yatbc-prepare/prepare.sh /var/www/yatbc

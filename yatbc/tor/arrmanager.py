@@ -167,6 +167,11 @@ def process_arr(arr_id: int):
                 f"Skipping {result.raw_title} due to episode mismatch: {arr.requested_episode} not in {result.episode}"
             )
             continue
+        if arr.skip_full_season and not episodes:
+            logger.debug(
+                f"Skipping {result.raw_title} due to full season skip enabled."
+            )
+            continue
         if not result.season or arr.requested_season != result.season:
             logger.debug(
                 f"Skipping {result.raw_title} due to season mismatch: {arr.requested_season} != {result.season}"

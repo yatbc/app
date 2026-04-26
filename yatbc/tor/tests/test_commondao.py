@@ -3,6 +3,7 @@ from ..models import Torrent, TorrentFile, TorrentType, AriaDownloadStatus
 from ..commondao import (
     get_active_torrents_with_current_history,
     get_active_torrents_with_formatted_age,
+    update_double,
 )
 from ..common import (
     get_name_from_magnet,
@@ -20,6 +21,15 @@ class CommonDaoTests(TestCase):
 
     def setUp(self):
         logging.config.dictConfig(console_logging_config)
+
+    def test_update_double(self):
+        first = create_torrent(TorrentType.objects.get_no_type())
+        second = create_torrent(TorrentType.objects.get_no_type())
+        self.assertFalse(first.doubled)
+        self.assertFalse(second.doubled)
+        update_double(first, second)
+        self.assertTrue(first.doubled)
+        self.assertTrue(second.doubled)
 
     def test_get_active_torrents_with_current_history(self):
         Torrent.objects.all().delete()

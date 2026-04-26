@@ -58,7 +58,7 @@ def get_active_queue(limit=None, transmission=False, all=False):
     queue = query.order_by(
         "-priority", "added_at"
     )  # sort by priority desc, then by added_at asc so older entries are processed first
-    if limit:
+    if limit is not None:
         return queue[:limit]
     return queue
 

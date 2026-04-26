@@ -13,11 +13,15 @@ from .commondao import (
     torrent_file_to_log,
     torrent_to_log,
     clean_html,
-    map_torbox_entry_to_torrent,
+    map_torbox_entry_to_torrent as map_entry_to_torrent,
     map_torbox_entry_to_torrent_history,
     get_active_torbox_downloads,
     add_to_queue_by_magnet,
+    get_previous_torrents,
+    get_torrents_with_no_history,
+    get_torrent_ides,
 )
+from torbox_api import TorboxApi
 from datetime import date, timedelta
 import requests
 from constance import config
@@ -49,7 +53,6 @@ class TorBoxApi:
         self.version = version
         self.logger = logging.getLogger("torbox")
         self.status_mgr = StatusMgr.get_instance()
-        from torbox_api import TorboxApi
 
         self.sdk = TorboxApi(
             access_token=self.access_token,
@@ -117,15 +120,14 @@ class TorBoxApi:
             return False, f"Could not add referral: {e}"
 
     def change_torrent(self, torrent, action):
-        body = body = json.dumps(
-            {"operation": action, "torrent_id": int(torrent.internal_id)}
-        )
+        body = {"operation": action, "torrent_id": int(torrent.internal_id)}
+
         try:
             self.logger.debug(body)
             result = requests.post(
                 f"https://{self.api}.{self.host}/{self.version}/api/torrents/controltorrent",
                 headers={"Authorization": f"Bearer {self.access_token}"},
-                data=body,
+                json=body,
             )
             if result.ok:
                 return True
@@ -133,6 +135,7 @@ class TorBoxApi:
         except Exception as e:
             self.logger.error(body)
             self.logger.error(e)
+
             add_log(
                 message=f"Could not change torrent: {torrent_to_log(torrent)}, {action}: {e}",
                 level=Level.objects.get_error(),
@@ -141,13 +144,17 @@ class TorBoxApi:
             )
             return False
 
-    def search_torrent(self, query, season=0, episode=0):
+    def search_torrent(self, query, season=0, episode=0, by_id=True):
         additional_params = ""
         if season != 0:
             additional_params += f"&season={season}"
         if episode != 0:
             additional_params += f"&episode={episode}"
-        url = f"https://{self.search_api}.{self.host}/torrents/imdb:{query}?metadata=true&check_cache=true&check_owned=true&search_user_engines=true{additional_params}"
+        if by_id:
+            search_query = f"imdb:{query}"
+        else:
+            search_query = f"search/{query}"
+        url = f"https://{self.search_api}.{self.host}/torrents/{search_query}?metadata=true&check_cache=true&check_owned=true&search_user_engines=true{additional_params}"
         self.logger.debug(f"Requesting search API: {url}")
         result = requests.get(
             url, headers={"Authorization": f"Bearer {self.access_token}"}
@@ -158,7 +165,34 @@ class TorBoxApi:
             return json_result
         self.logger.error(f"Failed to search torrent: {query}, {result.reason}")
         add_log(
-            message=f"Could not get result from torbox search api for query: <i>'{clean_html(query)}'</i>: reason: <i>'{clean_html(result.reason)}'</i>",
+            message=f"Could not get result from torbox search api for query: {clean_html(query)}: reason: {clean_html(result.reason)}",
+            level=Level.objects.get_error(),
+            source=LogSource.objects.get_torbox_api(),
+        )
+        return None
+
+    def search_usenet(self, query, season=0, episode=0, by_id=True):
+        additional_params = ""
+        if season != 0:
+            additional_params += f"&season={season}"
+        if episode != 0:
+            additional_params += f"&episode={episode}"
+        if by_id:
+            search_query = f"imdb:{query}"
+        else:
+            search_query = f"search/{query}"
+        url = f"https://{self.search_api}.{self.host}/usenet/{search_query}?metadata=true&check_cache=true&check_owned=true&search_user_engines=true{additional_params}"
+        self.logger.debug(f"Requesting search API: {url}")
+        result = requests.get(
+            url, headers={"Authorization": f"Bearer {self.access_token}"}
+        )
+        if result.ok:
+            json_result = json.loads(result.text)
+            self.logger.debug(json.dumps(json_result, indent=4))
+            return json_result
+        self.logger.error(f"Failed to search torrent: {query}, {result.reason}")
+        add_log(
+            message=f"Could not get result from torbox search api for query: {clean_html(query)}: reason: {clean_html(result.reason)}",
             level=Level.objects.get_error(),
             source=LogSource.objects.get_torbox_api(),
         )
@@ -195,17 +229,74 @@ class TorBoxApi:
             return None
         return None
 
-    def request_download_link(self, torrent, file):
+    def check_hashes_for_cached(self, hashes: list[str]) -> dict[str, bool]:
+        try:
+            self.logger.debug(f"Checking cached for hashes: {hashes}")
+            result = self.sdk.torrents.get_torrent_cached_availability(
+                hash=",".join(hashes),
+                api_version=self.version,
+                format="list",
+                list_files="true",
+            )
+
+            if result.error:
+                add_log(
+                    message=f"Failed to access tor api: {clean_html(result.error)}",
+                    level=Level.objects.get_error(),
+                    source=LogSource.objects.get_torbox_api(),
+                )
+                return None
+            if result.success:
+                return result.data
+            self.logger.error(
+                f"Wrong api structure, if there is no error, there should be a success in get_torrent_cached_availability"
+            )
+        except Exception as e:
+            add_log(
+                message=f"Could not check get_torrent_cached_availability: {clean_html(e)}",
+                level=Level.objects.get_error(),
+                source=LogSource.objects.get_torbox_api(),
+            )
+            return None
+        return None
+
+    def request_download_link(self, file: TorrentFile) -> str:
+        try:
+            result = self.sdk.torrents.request_download_link(
+                api_version=self.version,
+                token=self.access_token,
+                torrent_id=file.torrent.internal_id,
+                file_id=file.internal_id,
+            )
+            if not result.success:
+                add_log(
+                    message=f"Could not request download link for torrent {torrent_to_log(file.torrent)} using file link: {clean_html(result.error)}",
+                    level=Level.objects.get_error(),
+                    source=LogSource.objects.get_torbox_api(),
+                    torrent=file.torrent,
+                )
+                return None
+            return result.data
+        except Exception as e:
+            add_log(
+                message=f"Could not request download link for torrent {torrent_to_log(file.torrent)} file {torrent_file_to_log(file)}: {clean_html(e)}",
+                level=Level.objects.get_error(),
+                source=LogSource.objects.get_torbox_api(),
+                torrent=file.torrent,
+            )
+            return None
+
+    def request_download_link_as_zip(self, torrent) -> str:
         try:
             result = self.sdk.torrents.request_download_link(
                 api_version=self.version,
                 token=self.access_token,
                 torrent_id=torrent.internal_id,
-                file_id=file.internal_id,
+                zip_link="True",
             )
             if not result.success:
                 add_log(
-                    message=f"Could not request download link for torrent {torrent_to_log(torrent)} file {torrent_file_to_log(file)}: <i>'{clean_html(result.error)}'</i>",
+                    message=f"Could not request download link for torrent {torrent_to_log(torrent)} using zip link: {clean_html(result.error)}",
                     level=Level.objects.get_error(),
                     source=LogSource.objects.get_torbox_api(),
                     torrent=torrent,
@@ -214,12 +305,52 @@ class TorBoxApi:
             return result.data
         except Exception as e:
             add_log(
-                message=f"Could not request download link for torrent {torrent_to_log(torrent)} file {torrent_file_to_log(file)}: {clean_html(e)}",
+                message=f"Could not request download link for torrent {torrent_to_log(torrent)} as zip file: {clean_html(e)}",
                 level=Level.objects.get_error(),
                 source=LogSource.objects.get_torbox_api(),
                 torrent=torrent,
             )
             return None
+
+    def request_download_links(
+        self, torrent, remove_single_files_for_zip=True
+    ) -> list[(str, TorrentFile)]:
+        files = TorrentFile.objects.filter(torrent=torrent)
+        download_links = []
+        if files.count() > 10:
+            link = self.request_download_link_as_zip(torrent)
+            if not link:
+                return None
+            if remove_single_files_for_zip:
+                files.delete()  # remove single files and replace them with zip
+                add_log(
+                    message=f"Torrent has more then 10 files, will request zip file instead {torrent_to_log(torrent)}",
+                    level=Level.objects.get_info(),
+                    source=LogSource.objects.get_torbox_api(),
+                    torrent=torrent,
+                )
+            file = TorrentFile.objects.create(
+                torrent=torrent,
+                name=f"{torrent.name}.zip",
+                short_name=f"{torrent.name}.zip",
+                size=torrent.size,
+                internal_id=None,
+            )
+            return [(link, file)]
+        for file in files:
+            link = self.request_download_link(file)
+            if link:
+                download_links.append((link, file))
+            else:
+                self.logger.warning(
+                    f"Could not get download link for file: {file.name} in torrent: {torrent.name}, retrying"
+                )
+                link = self.request_download_link(file)
+                if link:
+                    download_links.append((link, file))
+                else:
+                    return None
+        return download_links
 
 
 def update_available_slots(api=None, force=False):
@@ -235,41 +366,12 @@ def update_available_slots(api=None, force=False):
         config.NEXT_MAX_DOWNLOAD_TORBOX_SLOTS_CHECK = date.today() + timedelta(days=1)
 
 
-def search_torrent(query, season, episode, api=None) -> TorrentTorBoxSearch | None:
+def create_torrent_search_entry(
+    result, torrent_search: TorrentTorBoxSearch, previous=None
+) -> TorrentTorBoxSearch:
     logger = logging.getLogger("torbox")
-    logger.info(f"Searching for: {query} {season} {episode}")
-    query_filter = TorrentTorBoxSearch.objects.filter_by_query_season_episode(
-        query=query, season=season, episode=episode
-    )
-    latest = query_filter.order_by("-date").first()
-
-    if latest:
-        latest_age = timezone.now() - latest.date
-        if latest_age < timezone.timedelta(hours=1):
-            logger.info(f"Search for: {query} is only {latest_age}, skipping")
-            return latest
-    if not api:
-        api = TorBoxApi()
-    result = api.search_torrent(query, season=season, episode=episode)
-    if not result:
-        return None
-
-    torrent_search = TorrentTorBoxSearch()
-    previous = []
-    if latest:
-        logger.info(f"Got new data, removing unassigned results from previous {query}")
-        TorrentTorBoxSearchResult.objects.delete_unassigned(query=latest)
-        torrent_search = latest
-        previous = TorrentTorBoxSearchResult.objects.filter(query=latest).values_list(
-            "hash", flat=True
-        )
-
-    torrent_search.date = timezone.now()
-    torrent_search.query = query
-    torrent_search.episode = episode
-    torrent_search.season = season
-    torrent_search.save()
     new_search_results = []
+    hashes_seen = set()
     for torrent in result["data"]["torrents"]:
         hash = torrent["hash"]
         if hash in previous:
@@ -314,19 +416,58 @@ def search_torrent(query, season, episode, api=None) -> TorrentTorBoxSearch | No
         torrent_search_result.last_known_seeders = torrent["last_known_seeders"]
         torrent_search_result.size = torrent["size"]
         torrent_search_result.cached = torrent["cached"]
-        if not torrent_search_result.torrent:
-            previous = Torrent.objects.filter(hash=torrent_search_result.hash)
-            if previous:
-                torrent_search_result.torrent = previous[0]
-                add_log(
-                    message=f"Torrent: {torrent_to_log(torrent_search_result.torrent)} already exists in search for: <i>'{clean_html(query)}'</i>",
-                    level=Level.objects.get_info(),
-                    source=LogSource.objects.get_torbox_api(),
-                    torrent=torrent_search_result.torrent,
-                )
+        hashes_seen.add(hash)
         new_search_results.append(torrent_search_result)
+
+    torrents_for_hash = Torrent.objects.filter(hash__in=hashes_seen)
+    hash_torrent_map = {t.hash: t for t in torrents_for_hash}
+    for search_result in new_search_results:
+        if not hash_torrent_map:
+            break
+        if search_result.hash in hash_torrent_map:
+            search_result.torrent = hash_torrent_map[search_result.hash]
+            del hash_torrent_map[search_result.hash]
     TorrentTorBoxSearchResult.objects.bulk_create(new_search_results)
     return torrent_search
+
+
+def search_torrent(query, season, episode, api=None) -> TorrentTorBoxSearch | None:
+    logger = logging.getLogger("torbox")
+    logger.info(f"Searching for: {query} {season} {episode}")
+    query_filter = TorrentTorBoxSearch.objects.filter_by_query_season_episode(
+        query=query, season=season, episode=episode
+    )
+    latest = query_filter.order_by("-date").first()
+
+    if latest:
+        latest_age = timezone.now() - latest.date
+        if latest_age < timezone.timedelta(hours=1):
+            logger.info(f"Search for: {query} is only {latest_age}, skipping")
+            return latest
+    if not api:
+        api = TorBoxApi()
+    result = api.search_torrent(query, season=season, episode=episode)
+    if not result:
+        return None
+
+    torrent_search = TorrentTorBoxSearch()
+    previous = []
+    if latest:
+        logger.info(f"Got new data, removing unassigned results from previous {query}")
+        TorrentTorBoxSearchResult.objects.delete_unassigned(query=latest)
+        torrent_search = latest
+        previous = TorrentTorBoxSearchResult.objects.filter(query=latest).values_list(
+            "hash", flat=True
+        )
+
+    torrent_search.date = timezone.now()
+    torrent_search.query = query
+    torrent_search.episode = episode
+    torrent_search.season = season
+    torrent_search.save()
+    return create_torrent_search_entry(
+        result, previous=previous, torrent_search=torrent_search
+    )
 
 
 def get_free_torbox_download_slots(api=None):
@@ -358,6 +499,13 @@ def add_torrent_by_data(torrent_type, magnet=None, blob=None, private=False, api
     TorrentHistory.objects.create(
         torrent=new_torrent, updated_at=timezone.now().isoformat(), state="New"
     )
+    # todo: move to the task?
+    search_result = JackettSearchResultBase.objects.filter(hash=new_torrent.hash)
+
+    for item in search_result:
+        item.torrent = new_torrent
+        item.save()
+
     return new_torrent
 
 
@@ -515,15 +663,36 @@ def update_torrent_list(api=None, request_files_task=None):
     if data is None:
         return None
     logger.debug(f"Updating entries: {len(data)} in torboxapi")
+    torrents = {}
+    for entry in data:
+        new_torrent = map_entry_to_torrent(entry, no_type)
+        torrents[new_torrent.hash] = {"new": new_torrent, "old": None, "double": None}
+    torrents = get_previous_torrents(torrent_map=torrents, client=TORBOX_CLIENT)
+    torrent_ids = get_torrent_ides(torrents)
+    torrents_with_no_history = get_torrents_with_no_history(torrent_ids)
+
     not_deleted = []
     for entry in data:
-        new_torrent = map_torbox_entry_to_torrent(entry, no_type=no_type)
-        torrent = update_torrent(new_torrent)
-        status_mgr.transition_in_client_progress_if_needed(torrent)
-        previous_activity = TorrentHistory.objects.filter(
-            torrent=torrent, updated_at=entry.updated_at
+        logger.debug(f"Processing entry: {entry.name} {entry.hash}")
+        new_torrent, old_torrent, double = (
+            torrents[entry.hash]["new"],
+            torrents[entry.hash]["old"],
+            torrents[entry.hash]["double"],
         )
-        if not previous_activity.exists():
+        # fixme: download_finished can be false, but it can still be processing, check download_present?
+        torrent = update_torrent(
+            new_torrent=new_torrent, old_torrent=old_torrent, double=double
+        )
+        has_history = torrent.id not in torrents_with_no_history
+        status_mgr.transition_in_client_progress_if_needed(
+            torrent, has_history=has_history
+        )
+        previous_activity = False
+        if has_history:
+            previous_activity = TorrentHistory.objects.filter(
+                torrent=torrent, updated_at=entry.updated_at
+            ).exists()
+        if not previous_activity:
             torrent_history = map_torbox_entry_to_torrent_history(entry, torrent)
             if new_torrent.download_finished:
                 torrent_history.progress = 1
@@ -532,18 +701,22 @@ def update_torrent_list(api=None, request_files_task=None):
             logger.debug("Torrent wasn't active from last check")
         files = TorrentFile.objects.filter(torrent=torrent)
         if entry.files and not files:
-            logger.debug(f"Filling files for: {torrent.name}")
+            logger.debug(
+                f"Filling files for: {torrent.name} with files: {len(entry.files)}"
+            )
+            new_files = []
             for file in entry.files:
-                logger.debug(file)
-                TorrentFile.objects.create(
+                new_file = TorrentFile(
                     torrent=torrent,
                     name=file.name,
                     short_name=file.short_name,
                     size=file.size,
-                    hash=file._kwargs["hash"],
+                    hash=(file._kwargs["hash"] if "hash" in file._kwargs else None),
                     mime_type=file.mimetype,
                     internal_id=file.id_,
                 )
+                new_files.append(new_file)
+            TorrentFile.objects.bulk_create(new_files)
 
         status_mgr.transition_in_client_done_if_needed(
             torrent,

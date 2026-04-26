@@ -83,6 +83,63 @@ function getDetails() {
                 }
             });
         },
+        drawRatioHistory(ratioHistory) {
+            ratio = ratioHistory.ratio;
+            const ctx = document.getElementById('torrentRatioHistory').getContext('2d');
+
+            new Chart(ctx, {
+                type: 'line',
+                data: {
+                    datasets: [{
+                        label: 'Ratio History',
+                        data: ratio,
+                        backgroundColor: 'rgba(75, 192, 192, 0.6)',
+                        borderColor: 'rgba(75, 192, 192, 1)',
+                        borderWidth: 1,
+                        pointRadius: 5
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        x: {
+                            type: 'time',
+                            time: {
+                                unit: 'day',
+                                displayFormats: {
+                                    day: 'yyyy-MM-dd'
+                                },
+                                tooltipFormat: 'yyyy-MM-dd'
+                            },
+                            title: {
+                                display: true,
+                                text: 'Date'
+                            },
+                            grid: {
+                                display: true
+                            }
+                        },
+                        y: {
+                            type: 'linear',
+                            position: 'left',
+                            title: {
+                                display: true,
+                                text: 'Ratio'
+                            },
+                            grid: {
+                                display: true // Show grid lines
+                            }
+                        },
+                    },
+                    plugins: {
+                        legend: {
+                            display: true // Hide legend if not needed
+                        }
+                    }
+                }
+            });
+        },
         drawSpeedHistory(speedHistory) {
             const ctx = document.getElementById('torrentSpeedHistory').getContext('2d');
 
@@ -204,6 +261,19 @@ function getDetails() {
                 },
             )
         },
+        getTorrentRatioHistory() {
+            this.callApi(
+                '/api/get_torrent_ratio_history/' + globalTorrentId,
+                errorMessage = "Could not fetch torrent ratio history",
+                successMessage = "",
+                method = "GET",
+                body = null,
+                onSuccess = (data) => {
+                    console.log("Torrent ratio history fetched:", data);
+                    this.drawRatioHistory(data);
+                },
+            )
+        },
         getTorrentLogs() {
             this.callApi(
                 '/api/get_torrent_log/' + globalTorrentId,
@@ -222,6 +292,7 @@ function getDetails() {
             this.fetchTorrentTypes();
             this.getTorrentSpeedHistory();
             this.getTorrentSeedersHistory();
+            this.getTorrentRatioHistory();
 
             this.getTorrentLogs();
         },

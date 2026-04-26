@@ -34,6 +34,8 @@ else
     . $PERSISTENT_DIR/.env
     python3 $PROJECT_DIR/manage.py migrate;
     python3 $PROJECT_DIR/manage.py collectstatic --noinput;          
-    python3 $PROJECT_DIR/manage.py prune_db_task_results;         
+    python3 $PROJECT_DIR/manage.py prune_db_task_results;
+    echo "VACUUM; ANALYZE;" | python3 $PROJECT_DIR/manage.py dbshell        
+    python3 $PROJECT_DIR/manage.py shell -c "from django_tasks.backends.database.models import DBTaskResult, TaskResultStatus; DBTaskResult.objects.filter(status__in=[TaskResultStatus.RUNNING, TaskResultStatus.READY]).update(status=TaskResultStatus.FAILED, traceback='Application restarted while task was running.');" 
 fi;  
 echo "YATBC version: $VERSION, prepared"

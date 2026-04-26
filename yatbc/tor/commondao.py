@@ -11,6 +11,9 @@ from .models import (
     LogSource,
     TorrentQueue,
 )
+from timeit import default_timer as timer
+from django.db.models import Max, OuterRef, Subquery
+from django.db.models.functions import TruncDate
 import math
 from django.db.models import Q, OuterRef, Subquery, ExpressionWrapper, fields, F
 import re
@@ -18,7 +21,10 @@ import logging
 from django.db import connection
 from django.utils import timezone
 import bleach
+from datetime import date
 from .common import TRANSMISSION_CLIENT, TORBOX_CLIENT
+from django.forms.models import model_to_dict
+from constance import config
 
 
 def clean_html(html):
@@ -66,54 +72,84 @@ def add_log(
     if arr:
         ArrErrorLog.objects.create(arr=arr, error_log=log)
     if level == Level.objects.get_error():
-        logger.error(f"Message: {log.message}, source: {log.source}")
+        logger.error(f"Message: {log.message}, source: {log.source.name}")
     if level == Level.objects.get_warning():
-        logger.warning(f"Message: {log.message}, source: {log.source}")
+        logger.warning(f"Message: {log.message}, source: {log.source.name}")
     if level == Level.objects.get_info():
-        logger.info(f"Message: {log.message}, source: {log.source}")
+        logger.info(f"Message: {log.message}, source: {log.source.name}")
     return log
 
 
 def prepare_torrent_dir_name(torrent_name: str):
-    return clean_html(torrent_name)
-
-
-def get_previous_torrent(new_torrent: Torrent):
-    result = Torrent.objects.filter(hash=new_torrent.hash, client=new_torrent.client)
-    if result:
-        result = result[0]
-        return result
-
-    return None
-
-
-def update_double(torrent):
     logger = logging.getLogger("torbox")
-    double = Torrent.objects.exclude(Q(pk=torrent.pk) | Q(deleted=True)).filter(
-        hash=torrent.hash
-    )
-    if torrent.doubled and not double:
+    cleaned = clean_html(torrent_name)
+    logger.debug(f"Preparing torrent dir name for: {torrent_name} cleaned: {cleaned}")
+    return cleaned
+
+
+def get_torrent_ides(torrent_map: dict):
+    torrent_ids = []
+    for _, mapping in torrent_map.items():
+        old_torrent = mapping[
+            "old"
+        ]  # we are only interested in previous torrents, new torrents will newer have history, and double are from different client
+        if old_torrent:
+            torrent_ids.append(old_torrent.pk)
+
+    return torrent_ids
+
+
+def get_previous_torrents(torrent_map: dict, client: str):
+    start = timer()
+    logger = logging.getLogger("torbox")
+    # torrent map should contain: [key] => {"new": not saved torrent, "old": None, "double": None}
+    result = Torrent.objects.filter(hash__in=torrent_map.keys())
+    for torrent in result:
+        if torrent.client == client:
+            torrent_map[torrent.hash]["old"] = torrent
+        elif torrent.client != client and not torrent.deleted:
+            torrent_map[torrent.hash]["double"] = torrent
+    logger.debug(f"get_previous_torrents took: {timer() - start}")
+    return torrent_map
+
+
+def get_torrents_with_no_history(torrent_ids: list[int]):
+    start = timer()
+    logger = logging.getLogger("torbox")
+    result = Torrent.objects.filter(
+        torrenthistory__isnull=True, id__in=torrent_ids
+    ).values_list("id", flat=True)
+    logger.debug(f"get_torrents_with_no_history took: {timer() - start}")
+    return result
+
+
+def update_double(torrent: Torrent, double: Torrent = None):
+    logger = logging.getLogger("torbox")
+    # double = Torrent.objects.exclude(Q(pk=torrent.pk) | Q(deleted=True)).filter(
+    #     hash=torrent.hash
+    # )
+    if torrent.doubled and not double:  # this will never update the previous double
         torrent.doubled = False
         torrent.save()
         logger.debug(f"Torrent no longer a double: {torrent}")
         return
 
-    if double:
-        double = double[0]
+    if double and (not double.doubled or not torrent.doubled):
         double.doubled = True
         double.save()
-        torrent.double = True
+        torrent.doubled = True
         torrent.save()
         logger.debug(f"Updating double status for: {double} {torrent}")
 
 
 def update_type(torrent: Torrent):
     logger = logging.getLogger("torbox")
-    no_type = TorrentType.objects.get(name="No Type")
+    no_type = TorrentType.objects.get_no_type()
     if torrent.torrent_type != no_type:
         logger.debug(f"Torrent {torrent} already had a type, skipping type update")
         return
-    movie_series = TorrentType.objects.get(name="Movie Series")
+
+    movie_series = TorrentType.objects.get_movie_series()
     result = re.search(
         "[sS]\\d{1,2}([eE]\\d{1,2})*", torrent.name
     )  # fixme: use common based on action_mgr
@@ -129,6 +165,27 @@ def update_type(torrent: Torrent):
             source=LogSource.objects.get_torbox_api(),
             torrent=torrent,
         )
+        return
+
+    if torrent.name.lower().endswith(".m4b"):
+        add_log(
+            message=f"Found m4b marker in {torrent.name} , updating as audiobook type",
+            level=Level.objects.get_info(),
+            source=LogSource.objects.get_torbox_api(),
+            torrent=torrent,
+        )
+        torrent.torrent_type = TorrentType.objects.get_audiobooks()
+        torrent.save()
+        return
+    if torrent.name.lower().endswith(".epub"):
+        add_log(
+            message=f"Found epub marker in {torrent.name} , updating as e-book type",
+            level=Level.objects.get_info(),
+            source=LogSource.objects.get_torbox_api(),
+            torrent=torrent,
+        )
+        torrent.torrent_type = TorrentType.objects.get_ebooks()
+        torrent.save()
         return
     logger.info(f"Couldn't determine type for torrent: {torrent}, leaving with No Type")
 
@@ -154,6 +211,30 @@ def map_torbox_entry_to_torrent(entry, no_type):
     )
 
 
+def map_transmission_entry_to_torrent(entry, no_type):
+    trackers = entry.trackers
+    tracker = ""
+    if trackers:
+        tracker = trackers[0].announce
+    return Torrent(
+        active=entry.eta != None,
+        hash=entry.hash_string,
+        name=entry.name,
+        size=entry.total_size,
+        created_at=entry.added_date,
+        download_finished=entry.seeding or entry.seed_pending,
+        download_present=entry.seeding or entry.seed_pending,
+        tracker=tracker,
+        total_uploaded=entry.uploaded_ever,
+        total_downloaded=entry.downloaded_ever,
+        client=TRANSMISSION_CLIENT,
+        magnet=entry.magnet_link,
+        internal_id=entry.id,
+        torrent_type=no_type,
+        private=entry.is_private,
+    )
+
+
 def map_torbox_entry_to_torrent_history(entry, torrent: Torrent):
     return TorrentHistory(
         torrent=torrent,
@@ -170,17 +251,21 @@ def map_torbox_entry_to_torrent_history(entry, torrent: Torrent):
     )
 
 
-def update_torrent(new_torrent: Torrent):
+def update_torrent(
+    new_torrent: Torrent, old_torrent: Torrent = None, double: Torrent = None
+):
     from .statusmgr import StatusMgr
 
     status_mgr = StatusMgr.get_instance()
     logger = logging.getLogger("torbox")
-    torrent = get_previous_torrent(new_torrent)
+    torrent = old_torrent  # get_previous_torrent(new_torrent)
     INFO = Level.objects.get_info()
+    torrent_updated = False
 
     if torrent:
 
         if torrent.deleted:
+            torrent_updated = True
             torrent.redownload = True
             torrent.deleted = False
             logger.info(f"Redownloading torrent: {torrent}")
@@ -198,21 +283,33 @@ def update_torrent(new_torrent: Torrent):
             logger.info(
                 f"Updated internal id for torrent: {torrent}, old: {torrent.internal_id}, new: {new_torrent.internal_id}"
             )
+            torrent.internal_id = new_torrent.internal_id
+            torrent_updated = True
 
         if torrent.magnet != new_torrent.magnet:
             torrent.magnet = new_torrent.magnet
+            torrent_updated = True
         if torrent.private != new_torrent.private:
             torrent.private = new_torrent.private
-        if torrent.cached != new_torrent.cached:
+            torrent_updated = True
+        if (
+            torrent.cached != new_torrent.cached
+            and torrent.local_status
+            == status_mgr.client_init  # only update cached if torrent is in init state to avoid overwriting cached status changed by user
+        ):
             torrent.cached = new_torrent.cached
+            torrent_updated = True
         if torrent.name != new_torrent.name:
             torrent.name = new_torrent.name
+            torrent_updated = True
         if torrent.size != new_torrent.size:
             torrent.size = new_torrent.size
+            torrent_updated = True
         if (
             new_torrent.torrent_type != torrent.torrent_type
             and torrent.torrent_type.name == "No Type"
         ):
+            torrent_updated = True
             logger.info(
                 f"New torrent: {new_torrent} has different type than previous torrent {torrent}"
             )
@@ -223,24 +320,49 @@ def update_torrent(new_torrent: Torrent):
                 torrent=torrent,
             )
             torrent.torrent_type = new_torrent.torrent_type
+        if torrent.tracker != new_torrent.tracker:
+            logger.debug(
+                f"Updating tracker for: {torrent.name} from {torrent.tracker} to {new_torrent.tracker}"
+            )
+            torrent_updated = True
+            torrent.tracker = new_torrent.tracker
+        if torrent.active != new_torrent.active:
+            torrent.active = new_torrent.active
+            torrent_updated = True
+        if torrent.total_uploaded != new_torrent.total_uploaded:
+            torrent.total_uploaded = new_torrent.total_uploaded
+            torrent_updated = True
+        if torrent.total_downloaded != new_torrent.total_downloaded:
+            torrent.total_downloaded = new_torrent.total_downloaded
+            torrent_updated = True
+        if torrent.download_present != new_torrent.download_present:
+            torrent.download_present = new_torrent.download_present
+            torrent_updated = True
+        if torrent.download_finished != new_torrent.download_finished:
+            torrent.download_finished = new_torrent.download_finished
+            torrent_updated = True
 
-        torrent.active = new_torrent.active
-        torrent.total_uploaded = new_torrent.total_uploaded
-        torrent.total_downloaded = new_torrent.total_downloaded
-        torrent.download_present = new_torrent.download_present
-        torrent.download_finished = new_torrent.download_finished
-        torrent.internal_id = new_torrent.internal_id
-
-        torrent.save()
+        # logger.debug(f"Saving updated torrent: {model_to_dict(torrent)}")
         if torrent.local_status == status_mgr.client_init:
             status_mgr.remote_client_added_torrent(torrent)
+        elif torrent_updated:
+            torrent.save()
         logger.debug("torrent already existed")
     else:
-
         status_mgr.remote_client_added_torrent(new_torrent)
         torrent = new_torrent
-    update_double(torrent)
+    update_double(torrent, double)
     update_type(torrent)
+    if (
+        config.SKIP_DOWNLOAD_FOR_NEXT_STATUS_CHECK_IN_TRANSMISSION
+        and torrent.client == TRANSMISSION_CLIENT
+        and torrent.local_status != status_mgr.finish_done
+    ) or (
+        config.SKIP_DOWNLOAD_FOR_NEXT_STATUS_CHECK_IN_TORBOX
+        and torrent.client == TORBOX_CLIENT
+        and torrent.local_status != status_mgr.finish_done
+    ):
+        status_mgr.force_transition_in_done(torrent)
 
     return torrent
 
@@ -269,10 +391,11 @@ def get_active_torbox_downloads():
 
 
 def get_active_transmission_downloads():
+    active_statuses = TorrentStatus.objects.get_client_active_statuses()
     return Torrent.objects.filter(
         deleted=False,
         client=TRANSMISSION_CLIENT,
-        download_finished=False,  # transmission can have unlimited active downloads, assume only unfinished are active
+        local_status__in=[status.id for status in active_statuses],
     ).count()
 
 
@@ -283,7 +406,9 @@ def get_active_torrents_with_current_history(
     torrent_type_id: int = 0,
     client: str = "",
     private: bool = False,
+    tracker: str = "",
     name: str = "",
+    statuses: list = None,
 ):
     latest_details_subquery = (
         TorrentHistory.objects.filter(torrent_id=OuterRef("pk"))
@@ -293,6 +418,8 @@ def get_active_torrents_with_current_history(
     filter = Torrent.objects.filter(deleted=False)
     if state_id != 0:
         filter = filter.filter(local_status__id=state_id)
+    if statuses is not None and len(statuses) > 0:
+        filter = filter.filter(local_status__in=[status.id for status in statuses])
     if torrent_type_id != 0:
         filter = filter.filter(torrent_type__id=torrent_type_id)
     if client:
@@ -301,6 +428,8 @@ def get_active_torrents_with_current_history(
         filter = filter.filter(private=private)
     if name:
         filter = filter.filter(name__icontains=name)
+    if tracker and tracker != "ALL":
+        filter = filter.filter(tracker__icontains=tracker)
     filter = (
         filter.annotate(latest_history_id=Subquery(latest_details_subquery))
         .annotate(
@@ -313,6 +442,19 @@ def get_active_torrents_with_current_history(
     if current is not None and limit is not None:
         filter = filter[current : current + limit]
     return filter
+
+
+def get_ratio_stats(torrent: Torrent):
+    sq = (
+        TorrentHistory.objects.filter(torrent=torrent, updated_at__gte=date(2000, 1, 1))
+        .annotate(date=TruncDate("updated_at"))
+        .values("date")
+        .annotate(latest_ts=Max("updated_at"))
+        .values("latest_ts")
+    )
+    return TorrentHistory.objects.filter(
+        torrent=torrent, updated_at__in=Subquery(sq)
+    ).order_by("updated_at")
 
 
 def get_history_with_age(history_id):
@@ -348,10 +490,11 @@ def get_active_torrents_with_formatted_age(
     torrent_type_id: int = 0,
     client: str = "",
     private: bool = False,
+    tracker: str = "",
     name: str = "",
 ):
     torrents = get_active_torrents_with_current_history(
-        current, limit, state_id, torrent_type_id, client, private, name
+        current, limit, state_id, torrent_type_id, client, private, tracker, name
     )
     for obj in torrents:
         age_in_seconds = obj.age.total_seconds()

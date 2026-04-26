@@ -8,7 +8,7 @@ from .models import (
     TorrentHistory,
 )
 from .commondao import add_log, format_log_value, torrent_to_log, torrent_file_to_log
-from .common import TORBOX_CLIENT, TRANSMISSION_CLIENT
+from .common import TORBOX_CLIENT, TRANSMISSION_CLIENT, remove_empty_dirs
 from constance import config
 from django.utils import timezone
 from pathlib import Path
@@ -168,7 +168,7 @@ class StatusMgr:
             and torrent.torrent_type.action_on_finish == TorrentType.ACTION_MOVE
         ):
             try:
-                source_dir.rmdir()
+                remove_empty_dirs(source_dir.as_posix())
                 add_log(
                     message=f"Source dir: {format_log_value(source_dir.as_posix())} for torrent: {torrent_to_log(torrent)}, was not needed anymore and was deleted",
                     source=LogSource.objects.get_status_mgr(),
@@ -176,7 +176,7 @@ class StatusMgr:
                     level=Level.objects.get_info(),
                 )
             except Exception as e:
-                message = f"Couldn't remove dir: {format_log_value(source_dir)},<br/> error: {format_log_value(e)},<br/> remove it manually"
+                message = f"Couldn't remove dir: {format_log_value(source_dir.as_posix())},<br/> error: {format_log_value(e)},<br/> remove it manually"
                 add_log(
                     message=message,
                     source=LogSource.objects.get_status_mgr(),
@@ -184,7 +184,7 @@ class StatusMgr:
                     torrent=torrent,
                 )
 
-    def aria_error(self, torrent, message):
+    def aria_error(self, torrent, message, aria=None):
         add_log(
             message=message,
             level=Level.objects.get_error(),
@@ -192,6 +192,10 @@ class StatusMgr:
             torrent=torrent,
             local_status=self.local_error,
         )
+        if aria:
+            aria.error = message
+            aria.status = "error"
+            aria.save()
 
     def aria_progress(self, torrent, message, done_downloading=False, file=None):
         add_log(
@@ -209,7 +213,7 @@ class StatusMgr:
                 torrent=torrent,
             )
 
-    def force_transition_in_client_done(self, torrent: Torrent, request_torrent_files):
+    def force_transition_in_client_progress(self, torrent: Torrent):
         allowed_statuses = [self.local_done, self.local_error, self.finish_done]
         if torrent.local_status not in allowed_statuses:
             self.logger.debug(
@@ -217,14 +221,17 @@ class StatusMgr:
             )
             return False
         add_log(
-            f"Forcing transition of torrent {torrent.id} to client done status",
+            f"Forcing transition of torrent {torrent.id} to client progress status",
             level=Level.objects.get_info(),
             source=LogSource.objects.get_status_mgr(),
             torrent=torrent,
         )
         torrent.finished_at = None
         torrent.save()
-        self.remote_client_done(torrent, request_torrent_files=request_torrent_files)
+        TorrentFile.objects.filter(
+            torrent=torrent
+        ).delete()  # downloading a zip, will remove file ides, so remove them now, and update task will update files and redownload them
+        self.remote_client_progress(torrent)
         return True
 
     def force_transition_in_done(self, torrent: Torrent):
@@ -240,11 +247,10 @@ class StatusMgr:
         torrent.save()
         self.torrent_done(torrent, skipped_download=True)
 
-    def transition_in_client_progress_if_needed(self, torrent: Torrent):
-        if (
-            not TorrentHistory.objects.filter(torrent=torrent).exists()
-            or torrent.local_status == self.client_added
-        ):
+    def transition_in_client_progress_if_needed(
+        self, torrent: Torrent, has_history: bool
+    ):
+        if not has_history or torrent.local_status == self.client_added:
             self.remote_client_progress(torrent)
 
     def transition_in_client_done_if_needed(
@@ -314,17 +320,13 @@ class StatusMgr:
 
             StatusMgr.unknown = TorrentStatus.objects.get(name="Unknown")
 
-            StatusMgr.client_init = TorrentStatus.objects.get(name="Client: Init")
-            StatusMgr.client_added = TorrentStatus.objects.get(name="Client: Added")
-            StatusMgr.client_progress = TorrentStatus.objects.get(
-                name="Client: In Progress"
-            )
-            StatusMgr.client_done = TorrentStatus.objects.get(name="Client: Done")
+            StatusMgr.client_init = TorrentStatus.objects.get_client_init()
+            StatusMgr.client_added = TorrentStatus.objects.get_client_added()
+            StatusMgr.client_progress = TorrentStatus.objects.get_client_in_progress()
+            StatusMgr.client_done = TorrentStatus.objects.get_client_done()
             StatusMgr.client_error = TorrentStatus.objects.get(name="Client: Error")
 
-            StatusMgr.local_error = TorrentStatus.objects.get(
-                name="Local download: Error"
-            )
+            StatusMgr.local_error = TorrentStatus.objects.get_local_download_error()
             StatusMgr.local_new = TorrentStatus.objects.get(name="Local download: New")
             StatusMgr.local_progress = TorrentStatus.objects.get(
                 name="Local download: Progress"

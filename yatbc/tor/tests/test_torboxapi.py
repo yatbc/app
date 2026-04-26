@@ -15,6 +15,7 @@ from ..torboxapi import (
     search_torrent,
     update_torrent_list,
     TORBOX_CLIENT,
+    TorBoxApi,
 )
 from ..commondao import prepare_torrent_dir_name
 import unittest
@@ -38,6 +39,36 @@ class TorboxApiTests(TestCase):
             target_dir="Fake/Path/To/Target",
         )
         self.no_type = TorrentType.objects.get(name="No Type")
+
+    @unittest.mock.patch("tor.torboxapi.TorboxApi")
+    def test_ok_request_download_link(self, api):
+        # Arrange
+        torrent = create_torrent(self.no_type)
+        torrent_file = create_torrent_file(torrent=torrent, name="file1.mkv")
+
+        # Act
+        torbox = TorBoxApi()
+        result = torbox.request_download_links(torrent)
+
+        # Assert
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0][1], torrent_file)
+
+    @unittest.mock.patch("tor.torboxapi.TorboxApi")
+    def test_ok_request_more_than_10_files(self, api):
+        # Arrange
+        torrent = create_torrent(self.no_type)
+        for i in range(12):
+            torrent_file = create_torrent_file(torrent=torrent, name=f"file{i}.mkv")
+
+        # Act
+        torbox = TorBoxApi()
+        result = torbox.request_download_links(torrent)
+
+        # Assert
+        torrent.refresh_from_db()
+        self.assertEqual(len(result), 1)
+        self.assertEqual(torrent.torrentfile_set.count(), 1)
 
     def test_ok_add_torrent(self):
         api = unittest.mock.Mock()

@@ -1,9 +1,12 @@
+from pathlib import Path
+
 from .commondao import (
     add_log,
     torrent_file_to_log,
     torrent_to_log,
     prepare_torrent_dir_name,
     format_log_value,
+    TORBOX_CLIENT,
 )
 from .models import Torrent, Level, TorrentFile, AriaDownloadStatus, LogSource
 from .ariaapi import AriaApi
@@ -85,7 +88,7 @@ def request_dl_link(
         )
         return
     files = get_files_ready_to_download(torrent_files=torrent_files, source=source)
-    if not files:
+    if not files or len(files) != len(torrent_files):
         return
     if not api:
         raise Exception("No client api given")
@@ -93,20 +96,14 @@ def request_dl_link(
     if not aria_api:
         raise Exception("No aria api given")
 
+    links = api.request_download_links(torrent=torrent)
+    if not links:
+        return
     request_data = []
-    for file in files:
-        result = api.request_download_link(torrent=torrent, file=file)
-        if not result:
-            logger.warning(
-                f"Requesting link for torrent id: {torrent.id} failed, trying again"
-            )
-            result = api.request_download_link(torrent=torrent, file=file)
-            if not result:
-                status_mgr.remote_client_error(torrent)
-                return
+    for url, file in links:
         request_data.append(
             {
-                "url": result,
+                "url": url,
                 "path": f"{aria_dir}/{prepare_torrent_dir_name(torrent.name)}",
                 "file": file,
             }
@@ -117,8 +114,9 @@ def request_dl_link(
         url = request["url"]
         path = request["path"]
         file = request["file"]
+        short_name = file.short_name if file.short_name else Path(file.name).name
         ok, aria_id = aria_api.download_file(
-            link=url, target_name=file.short_name, target_folder=path, torrent=torrent
+            link=url, target_name=short_name, target_folder=path, torrent=torrent
         )
         if not ok:
             logger.error(f"Could not request Aria to download file: {url}, stopping")

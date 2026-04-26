@@ -11,7 +11,8 @@ function getData() {
             current_episode: 1,
             include_words: "",
             exclude_words: "",
-            active: true
+            active: true,
+            skip_full_season: false
         },
         showHelp: false,
         defaultArr: null,

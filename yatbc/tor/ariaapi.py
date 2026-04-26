@@ -12,6 +12,7 @@ from .models import (
     TorrentType,
     Level,
     LogSource,
+    TorrentStatus,
 )
 from .statusmgr import StatusMgr
 
@@ -24,6 +25,13 @@ from .commondao import (
     add_log,
     format_log_value,
 )
+
+
+def censor_sftp_link(link: str):
+    if link.startswith("sftp://") and "@" in link:
+        return "sftp://censored" + link[link.index("@") :]
+
+    return link
 
 
 class AriaApi:
@@ -70,7 +78,7 @@ class AriaApi:
                 return False, result.reason
         except Exception as e:
             self.logger.error("Couldn't getVersion of Aria2c: " + str(e))
-            return None
+            return None, str(e)
 
     def download_file(self, link, target_name, target_folder, torrent=None):
         try:
@@ -89,7 +97,7 @@ class AriaApi:
                     ],
                 }
             )
-            self._log_query(query)
+            self._log_query(query.replace(link, censor_sftp_link(link)))
             result = requests.post(self.aria, data=query)
 
             if result.ok:
@@ -103,14 +111,14 @@ class AriaApi:
                 return False, result.reason
         except Exception as e:
             add_log(
-                message=f"Could not download file: <i>'{link}'</i> to <i>'{target_folder}/{target_name}'</i>: <i>'{clean_html(e)}'</i>",
+                message=f"Could not download file: {censor_sftp_link(link)} to {format_log_value(target_folder+'/'+target_name)}: {clean_html(e)}",
                 level=Level.objects.get_error(),
                 source=LogSource.objects.get_aria_api(),
                 torrent=torrent,
             )
             return False, str(e)
 
-    def _log_query(self, query):
+    def _log_query(self, query: str):
         censored = query
         if self.secret:
             censored = query.replace(self.secret, "***")
@@ -133,15 +141,21 @@ class AriaApi:
             }
         )
         self._log_query(query)
-        result = requests.post(self.aria, data=query)
+        try:
+            result = requests.post(self.aria, data=query)
 
-        if result.ok:
-            json_result = json.loads(result.content)
-            self.logger.debug(f"Aria2c tellStatus result: {json_result}")
-            return True, json_result["result"]
-        else:
-            self.logger.error(f"Could not get tellStatus from aria: {result.reason}")
-            return False, result.reason
+            if result.ok:
+                json_result = json.loads(result.content)
+                self.logger.debug(f"Aria2c tellStatus result: {json_result}")
+                return True, json_result["result"]
+            else:
+                self.logger.error(
+                    f"Could not get tellStatus from aria: {result.reason}"
+                )
+                return False, result.reason
+        except Exception as e:
+            self.logger.error(f"Couldn't get tellStatus of Aria2c: {str(e)}")
+            return False, str(e)
 
 
 def validate_aria_api(host, port, password, api=None):
@@ -229,7 +243,8 @@ def update_status(aria_internal_id, api=None):
     if not ok:
         status_mgr.aria_error(
             torrent,
-            message=f"Could not get result from aria api for aria internal id <i>'{aria_internal_id}'</i>: {format_log_value(result)}",
+            message=f"Could not get result from aria api for aria internal id {format_log_value(aria_internal_id)}: {format_log_value(result)}",
+            aria=aria_download_status,
         )
         return
 
@@ -239,6 +254,7 @@ def update_status(aria_internal_id, api=None):
         status_mgr.aria_error(
             torrent,
             message=f"Aria download failed with error: {format_log_value(status.error)}, aria_id: {format_log_value(aria_internal_id)}, file: {torrent_file_to_log(file)}",
+            aria=aria_download_status,
         )
         return
 
@@ -250,7 +266,7 @@ def update_status(aria_internal_id, api=None):
     )
 
 
-def calculate_progress(files: TorrentFile):
+def calculate_progress(files: list[TorrentFile]):
     logger = logging.getLogger("torbox")
     if len(files) == 0:
         logger.warning("No files found for torrent, returning 0 progress")
@@ -269,6 +285,9 @@ def calculate_progress(files: TorrentFile):
                 torrent=file.torrent,
             )
             break
+        if file.aria.status == "error":
+            logger.warning(f"File: {file} has aria error: {file.aria.error}, returning")
+            return -1, None, False
         total += 1.0
         progress += file.aria.progress
         if file.aria.done:
@@ -302,27 +321,42 @@ def check_local_download_status(api=None):
     files = AriaDownloadStatus.objects.filter(
         done=False, error="", internal_id__isnull=False
     )
-    for aria in files:
+    for aria in files[
+        :10
+    ]:  # aria will probably not manage to download more files between checks, and if torrent has more files, this will just query aria unnecessarily
         logger.debug(
             f"Checking status of: {aria.id} with internal id: {aria.internal_id}"
         )
         update_status(aria.internal_id, api=api)
 
     torrents = Torrent.objects.exclude(
-        Q(local_download_finished=True) | Q(deleted=True)
+        Q(local_download_finished=True)
+        | Q(deleted=True)
+        | Q(local_status=TorrentStatus.objects.get_local_download_error())
     ).filter(local_download=True)
 
-    # update torrent progress for downloading files from torbox to local storage
+    # update torrent progress for downloading files from torbox/seedbox to local storage
     for torrent in torrents:
         files = TorrentFile.objects.filter(torrent=torrent)
         total, progress, done = calculate_progress(files)
+        if total == -1:
+            status_mgr.aria_error(
+                torrent,
+                message=f"One of the files of torrent: {torrent_to_log(torrent)} has aria error, marking whole torrent as error",
+                aria=None,
+            )
+            continue
         if total == 0:
             logger.warning(
                 f"Torrent: {torrent} has no total value, skipping progress update"
             )
             continue
-        torrent.local_download_progress = progress / total
-        torrent.save()
-        logger.debug(f"Updating progress: {torrent} {torrent.local_download_progress}")
+        new_progress = progress / total
+        if torrent.local_download_progress != new_progress:
+            torrent.local_download_progress = new_progress
+            torrent.save()
+            logger.debug(
+                f"Updating progress: {torrent} {torrent.local_download_progress}"
+            )
         if len(done) == len(files):
             status_mgr.aria_done(torrent=torrent)

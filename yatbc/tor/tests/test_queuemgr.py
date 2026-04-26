@@ -167,6 +167,11 @@ class QueueMgrTests(TestCase):
         )
         self.assertEqual(len(active), private_count + public_count - 3)
 
+        active = get_active_queue(transmission=False, limit=0)
+        self.assertEqual(len(active), 0)
+        active = get_active_queue(transmission=True, limit=0)
+        self.assertEqual(len(active), 0)
+
     def test_active_queue_download_only_specific_types_on_transmission(self):
         TorrentQueue.objects.all().delete()
         config.DOWNLOAD_PRIVATE_ON_TRANSMISSION_ONLY = False
